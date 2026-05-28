@@ -50,6 +50,10 @@ def apply_migrations(engine):
         # Promote date-only strings to full datetime strings so SQLAlchemy's
         # DateTime processor can parse them after the start_date/end_date type
         # was changed from date → datetime.
+        if "depends_on_id" not in task_cols:
+            conn.execute(text("ALTER TABLE task ADD COLUMN depends_on_id INTEGER REFERENCES task(id)"))
+            conn.commit()
+
         for col in ("start_date", "end_date"):
             conn.execute(text(
                 f"UPDATE task SET {col} = {col} || ' 00:00:00' "

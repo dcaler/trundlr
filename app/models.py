@@ -70,6 +70,10 @@ class Task(SQLModel, table=True):
     resource_id: Optional[int] = Field(
         default=None, foreign_key="resource.id", index=True
     )
+    # Optional predecessor: this task should start after depends_on finishes.
+    depends_on_id: Optional[int] = Field(
+        default=None, foreign_key="task.id", index=True
+    )
 
     project: Optional[Project] = Relationship(back_populates="tasks")
     resource: Optional[Resource] = Relationship(back_populates="tasks")

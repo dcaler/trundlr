@@ -40,9 +40,27 @@ function setupResourceAutoStart(form) {
       const data = await api.get(`/resources/${rid}/next-available`);
       if (data.next_available) {
         startEl.value = data.next_available.slice(0, 16).replace(' ', 'T');
-        startEl.dispatchEvent(new Event('change')); // trigger end calc
+        startEl.dispatchEvent(new Event('change'));
       }
     } catch (_) { /* leave blank if fetch fails */ }
+  });
+}
+
+// When a dependency task is selected, fill start_date from that task's end (or start).
+function setupDependencyAutoStart(form, taskById) {
+  const depEl   = form.querySelector('[name="depends_on_id"]');
+  const startEl = form.querySelector('[name="start_date"]');
+  if (!depEl || !startEl) return;
+  depEl.addEventListener('change', () => {
+    const depId = parseInt(depEl.value);
+    if (!depId) return;
+    const dep = taskById[depId];
+    if (!dep) return;
+    const anchor = dep.end_date || dep.start_date;
+    if (anchor) {
+      startEl.value = anchor.slice(0, 16).replace(' ', 'T');
+      startEl.dispatchEvent(new Event('change'));
+    }
   });
 }
 
@@ -168,6 +186,17 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
   ]);
 
   const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
+  const taskById     = Object.fromEntries(tasks.map(t => [t.id, t]));
+
+  // Dependency dropdown — excludes the task being edited (selfId) to prevent self-reference
+  const dependsOptions = (selectedId, selfId) => [
+    `<option value=""${!selectedId ? ' selected' : ''}>— none —</option>`,
+    ...tasks
+      .filter(t => t.id !== selfId)
+      .map(t =>
+        `<option value="${t.id}"${t.id === selectedId ? ' selected' : ''}>${escHtml(t.title)}</option>`
+      ),
+  ].join('');
 
   const resourceOptions = (selectedId) => [
     `<option value=""${!selectedId ? ' selected' : ''}>— unassigned —</option>`,
@@ -188,6 +217,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
           <form class="form-row edit-task-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
             <div><label>Title</label><input name="title" value="${escHtml(t.title)}" required style="width:160px"></div>
             <div><label>Resource</label><select name="resource_id">${resourceOptions(t.resource_id)}</select></div>
+            <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(t.depends_on_id, t.id)}</select></div>
             <div><label>Start</label><input type="datetime-local" name="start_date" value="${dtLocal(t.start_date)}"></div>
             <div><label>End (auto)</label><input type="datetime-local" name="end_date" value="${dtLocal(t.end_date)}" readonly></div>
             <div><label>Load</label><input type="number" name="load" value="${t.load}" min="0.01" step="any" style="width:70px"></div>
@@ -209,6 +239,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         </select>
       </td>
       <td>${res ? escHtml(res.name) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td style="color:var(--text-muted);font-size:0.8rem">${t.depends_on_id && taskById[t.depends_on_id] ? '↳ ' + escHtml(taskById[t.depends_on_id].title) : '—'}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
       <td>${t.load}</td>
@@ -233,6 +264,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
       <div><label>Title *</label><input name="title" required placeholder="Task title" style="width:180px"></div>
       <div><label>Resource</label><select name="resource_id">${resourceOptions(null)}</select></div>
+      <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(null, null)}</select></div>
       <div><label>Start</label><input type="datetime-local" name="start_date"></div>
       <div><label>End (auto)</label><input type="datetime-local" name="end_date" readonly></div>
       <div><label>Load</label><input type="number" name="load" value="1" min="0.01" step="any" style="width:70px"></div>
@@ -246,7 +278,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       ? '<p style="color:var(--text-muted)">No tasks yet — add one above.</p>'
       : `<table>
           <thead><tr>
-            <th>Title</th><th>Status</th><th>Resource</th>
+            <th>Title</th><th>Status</th><th>Resource</th><th>Depends on</th>
             <th>Start</th><th>End</th><th>Load</th><th>Duration</th><th style="width:100px"></th>
           </tr></thead>
           <tbody>${taskRows}</tbody>
@@ -258,6 +290,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
   const addForm = el.querySelector('#add-task-form');
   setupAutoCalcEnd(addForm);
   setupResourceAutoStart(addForm);
+  setupDependencyAutoStart(addForm, taskById);
 
   el.querySelector('#add-task-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -265,10 +298,12 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     const ridRaw = fd.get('resource_id');
     const durRaw = fd.get('duration');
     try {
+      const depRaw = fd.get('depends_on_id');
       await api.post('/tasks/', {
         title: fd.get('title'),
         project_id: projectId,
         resource_id: ridRaw ? parseInt(ridRaw) : null,
+        depends_on_id: depRaw ? parseInt(depRaw) : null,
         start_date: fd.get('start_date') || null,
         end_date: fd.get('end_date') || null,
         load: parseFloat(fd.get('load')),
@@ -286,6 +321,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
   const editTaskForm = el.querySelector('.edit-task-form');
   if (editTaskForm) {
     setupAutoCalcEnd(editTaskForm);
+    setupDependencyAutoStart(editTaskForm, taskById);
     const editRow = editTaskForm.closest('tr');
     editTaskForm.addEventListener('submit', async e => {
       e.preventDefault();
@@ -293,9 +329,11 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       const ridRaw = fd.get('resource_id');
       const durRaw = fd.get('duration');
       try {
+        const depRaw2 = fd.get('depends_on_id');
         await api.patch(`/tasks/${editRow.dataset.id}`, {
           title: fd.get('title'),
           resource_id: ridRaw ? parseInt(ridRaw) : null,
+          depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
           start_date: fd.get('start_date') || null,
           end_date: fd.get('end_date') || null,
           load: parseFloat(fd.get('load')),

@@ -71,6 +71,7 @@ class TaskCreate(BaseModel):
     title: NonEmptyStr
     project_id: BodyId
     resource_id: OptionalBodyId = None
+    depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     load: PositiveFloat = 1.0
@@ -86,6 +87,7 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: Optional[NonEmptyStr] = None
     resource_id: OptionalBodyId = None
+    depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     load: Optional[PositiveFloat] = None
@@ -108,6 +110,7 @@ class TaskRead(BaseModel):
     duration: Optional[float] = None
     project_id: int
     resource_id: Optional[int] = None
+    depends_on_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
