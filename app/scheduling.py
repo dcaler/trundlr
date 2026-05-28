@@ -13,7 +13,7 @@ with no branching on resource type. The unit difference is purely semantic.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Iterable, Iterator, Optional
 
 from sqlmodel import Session, select
@@ -29,16 +29,27 @@ class DayUtilization:
     utilization: float  # committed / capacity * 100, a percentage (>100 => over-allocated)
 
 
+def _as_date(d: date | datetime) -> date:
+    """Extract the date part whether d is a date or datetime."""
+    return d.date() if isinstance(d, datetime) else d
+
+
 def task_active_on(task: Task, day: date) -> bool:
     """Whether `task` consumes load on `day`.
 
     Both date endpoints are inclusive. A task contributes load only once it has a
     start date; an open-ended task (start set, end None) is active from its start
     onward. A task with no start_date is unscheduled and never contributes.
+    Works with both date and datetime values for start_date/end_date.
     """
-    if task.start_date is None or day < task.start_date:
+    if task.start_date is None:
         return False
-    return task.end_date is None or day <= task.end_date
+    start = _as_date(task.start_date)
+    if day < start:
+        return False
+    if task.end_date is None:
+        return True
+    return day <= _as_date(task.end_date)
 
 
 def daily_committed_load(tasks: Iterable[Task], day: date) -> float:

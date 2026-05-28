@@ -45,7 +45,7 @@ jobs:
 
       - name: Test Docker image
         run: |
-          docker run --rm -d -p 8000:8000 --name trundlr-test trundlr:latest
+          docker run --rm -d -p 8251:8251 --name trundlr-test trundlr:latest
           sleep 2
-          curl -f http://localhost:8000/health || exit 1
+          curl -f http://localhost:8251/health || exit 1
           docker stop trundlr-test
