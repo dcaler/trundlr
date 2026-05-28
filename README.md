@@ -19,10 +19,10 @@ cd trundlr
 docker compose up -d
 
 # 3. Open the UI
-open http://localhost:8000
+open http://localhost:8251
 
 # 4. Browse the interactive API docs
-open http://localhost:8000/docs
+open http://localhost:8251/docs
 ```
 
 Data is persisted in a named Docker volume (`trundlr-data`) and survives container restarts.
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 
 # 4. Open the UI
-open http://localhost:8000
+open http://localhost:8251
 ```
 
 The database file (`trundlr.db`) is created in the working directory on first startup.
@@ -58,7 +58,7 @@ The database file (`trundlr.db`) is created in the working directory on first st
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `sqlite:///trundlr.db` | SQLAlchemy connection string. Use `sqlite:////app/data/trundlr.db` for a volume-mounted path inside Docker. Switch to a PostgreSQL URL (`postgresql://user:pass@host/db`) with no code changes. |
-| `PORT` | `8000` | Host port mapping in docker-compose (`${PORT:-8000}:8000`). |
+| `PORT` | `8251` | Host port mapping in docker-compose (`${PORT:-8251}:8251`). |
 
 Set variables in `.env` (loaded automatically by `docker compose`) or pass them on the command line:
 

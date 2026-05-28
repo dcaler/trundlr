@@ -1,6 +1,6 @@
 from typing import Generator, Optional
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -30,6 +30,32 @@ def get_engine(database_url: str = "sqlite:///trundlr.db"):
 def create_db_and_tables(engine):
     """Create all tables in the database."""
     SQLModel.metadata.create_all(engine)
+
+
+def apply_migrations(engine):
+    """Run additive schema migrations for columns added after initial creation."""
+    with engine.connect() as conn:
+        result = conn.execute(text("PRAGMA table_info(project)"))
+        project_cols = {row[1] for row in result}
+        if "folder" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN folder TEXT"))
+            conn.commit()
+
+        result = conn.execute(text("PRAGMA table_info(task)"))
+        task_cols = {row[1] for row in result}
+        if "duration" not in task_cols:
+            conn.execute(text("ALTER TABLE task ADD COLUMN duration REAL"))
+            conn.commit()
+
+        # Promote date-only strings to full datetime strings so SQLAlchemy's
+        # DateTime processor can parse them after the start_date/end_date type
+        # was changed from date → datetime.
+        for col in ("start_date", "end_date"):
+            conn.execute(text(
+                f"UPDATE task SET {col} = {col} || ' 00:00:00' "
+                f"WHERE {col} IS NOT NULL AND length({col}) = 10"
+            ))
+        conn.commit()
 
 
 def get_session(engine) -> Generator[Session, None, None]:

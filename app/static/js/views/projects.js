@@ -1,21 +1,90 @@
 // ── Projects view ─────────────────────────────────────────────────────────
 
-async function showProjectsList(el) {
+// Format ISO datetime string for display: "2025-06-01T09:00:00" → "2025-06-01 09:00"
+function fmtDt(iso) {
+  if (!iso) return '—';
+  return iso.replace('T', ' ').slice(0, 16);
+}
+
+// Truncate ISO datetime to "YYYY-MM-DDTHH:MM" for datetime-local input value
+function dtLocal(iso) {
+  if (!iso) return '';
+  return iso.slice(0, 16).replace(' ', 'T');
+}
+
+// Wire up start_date + duration → auto-fill end_date (readonly) on a task form.
+function setupAutoCalcEnd(form) {
+  const startEl = form.querySelector('[name="start_date"]');
+  const durEl   = form.querySelector('[name="duration"]');
+  const endEl   = form.querySelector('[name="end_date"]');
+  if (!startEl || !durEl || !endEl) return;
+  function calc() {
+    if (!startEl.value || !durEl.value) { endEl.value = ''; return; }
+    const ms = new Date(startEl.value).getTime() + parseFloat(durEl.value) * 3_600_000;
+    if (!isNaN(ms)) endEl.value = new Date(ms).toISOString().slice(0, 16);
+  }
+  startEl.addEventListener('change', calc);
+  durEl.addEventListener('change', calc);
+  calc(); // run once on load in case values are already set
+}
+
+// When a resource is selected in a task form, fill start_date with its next available slot.
+function setupResourceAutoStart(form) {
+  const ridEl   = form.querySelector('[name="resource_id"]');
+  const startEl = form.querySelector('[name="start_date"]');
+  if (!ridEl || !startEl) return;
+  ridEl.addEventListener('change', async () => {
+    const rid = ridEl.value;
+    if (!rid) return;
+    try {
+      const data = await api.get(`/resources/${rid}/next-available`);
+      if (data.next_available) {
+        startEl.value = data.next_available.slice(0, 16).replace(' ', 'T');
+        startEl.dispatchEvent(new Event('change')); // trigger end calc
+      }
+    } catch (_) { /* leave blank if fetch fails */ }
+  });
+}
+
+async function showProjectsList(el, editingId = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
   const projects = await api.get('/projects/');
+
+  const rows = projects.map(p => {
+    if (p.id === editingId) {
+      return `<tr class="edit-row" data-id="${p.id}">
+        <td colspan="4">
+          <form class="form-row edit-project-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
+            <div><label>Name</label><input name="name" value="${escHtml(p.name)}" required style="width:180px"></div>
+            <div><label>Folder</label><input name="folder" value="${escHtml(p.folder || '')}" style="width:140px"></div>
+            <div><label>Description</label><input name="description" value="${escHtml(p.description || '')}" style="width:220px"></div>
+            <div style="align-self:flex-end;display:flex;gap:0.25rem">
+              <button type="submit" class="btn btn-primary">Save</button>
+              <button type="button" class="btn btn-ghost cancel-project-edit">Cancel</button>
+            </div>
+          </form>
+        </td>
+      </tr>`;
+    }
+    return `<tr>
+      <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(p.name)}</button></td>
+      <td style="color:var(--text-muted)">${escHtml(p.folder || '—')}</td>
+      <td style="color:var(--text-muted)">${escHtml(p.description || '—')}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <button class="btn btn-ghost edit-project-btn" data-id="${p.id}" title="Edit">✎</button>
+        <button class="btn btn-ghost copy-project-btn" data-id="${p.id}" title="Duplicate">⧉</button>
+        <button class="btn btn-danger delete-project-btn" data-id="${p.id}">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
 
   el.innerHTML = `
     <h1>Projects</h1>
 
     <form id="create-project-form" class="form-row" style="margin-bottom:1.5rem">
-      <div>
-        <label>Name</label>
-        <input name="name" required placeholder="Project name" style="width:200px">
-      </div>
-      <div>
-        <label>Description</label>
-        <input name="description" placeholder="Optional" style="width:260px">
-      </div>
+      <div><label>Name</label><input name="name" required placeholder="Project name" style="width:200px"></div>
+      <div><label>Folder</label><input name="folder" placeholder="Optional folder" style="width:160px"></div>
+      <div><label>Description</label><input name="description" placeholder="Optional" style="width:260px"></div>
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ New Project</button>
       </div>
@@ -25,19 +94,9 @@ async function showProjectsList(el) {
       ? '<p style="color:var(--text-muted)">No projects yet — create one above.</p>'
       : `<table>
           <thead><tr>
-            <th>Name</th><th>Description</th><th style="width:160px"></th>
+            <th>Name</th><th>Folder</th><th>Description</th><th style="width:160px"></th>
           </tr></thead>
-          <tbody>
-            ${projects.map(p => `
-              <tr>
-                <td><strong>${escHtml(p.name)}</strong></td>
-                <td style="color:var(--text-muted)">${escHtml(p.description || '—')}</td>
-                <td style="white-space:nowrap;text-align:right">
-                  <button class="btn btn-ghost view-btn" data-id="${p.id}">View tasks</button>
-                  <button class="btn btn-danger delete-project-btn" data-id="${p.id}">✕</button>
-                </td>
-              </tr>`).join('')}
-          </tbody>
+          <tbody>${rows}</tbody>
         </table>`}
   `;
 
@@ -47,16 +106,46 @@ async function showProjectsList(el) {
     try {
       await api.post('/projects/', {
         name: fd.get('name'),
+        folder: fd.get('folder') || null,
         description: fd.get('description') || null,
       });
       await showProjectsList(el);
-    } catch (err) {
-      alert(`Error: ${err.message}`);
-    }
+    } catch (err) { alert(`Error: ${err.message}`); }
   });
 
   el.querySelectorAll('.view-btn').forEach(btn =>
     btn.addEventListener('click', () => showProjectDetail(el, parseInt(btn.dataset.id)))
+  );
+
+  el.querySelectorAll('.edit-project-btn').forEach(btn =>
+    btn.addEventListener('click', () => showProjectsList(el, parseInt(btn.dataset.id)))
+  );
+
+  const editForm = el.querySelector('.edit-project-form');
+  if (editForm) {
+    editForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const id = editForm.closest('tr').dataset.id;
+      try {
+        await api.patch(`/projects/${id}`, {
+          name: fd.get('name'),
+          folder: fd.get('folder') || null,
+          description: fd.get('description') || null,
+        });
+        await showProjectsList(el);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    });
+    el.querySelector('.cancel-project-edit').addEventListener('click', () => showProjectsList(el));
+  }
+
+  el.querySelectorAll('.copy-project-btn').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      try {
+        await api.post(`/projects/${btn.dataset.id}/copy`, {});
+        await showProjectsList(el);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    })
   );
 
   el.querySelectorAll('.delete-project-btn').forEach(btn =>
@@ -65,14 +154,12 @@ async function showProjectsList(el) {
       try {
         await api.delete(`/projects/${btn.dataset.id}`);
         await showProjectsList(el);
-      } catch (err) {
-        alert(`Error: ${err.message}`);
-      }
+      } catch (err) { alert(`Error: ${err.message}`); }
     })
   );
 }
 
-async function showProjectDetail(el, projectId) {
+async function showProjectDetail(el, projectId, editingTaskId = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
   const [project, tasks, resources] = await Promise.all([
     api.get(`/projects/${projectId}`),
@@ -80,54 +167,78 @@ async function showProjectDetail(el, projectId) {
     api.get('/resources/'),
   ]);
 
-  const resourceOptions = [
-    '<option value="">— unassigned —</option>',
-    ...resources.map(r => `<option value="${r.id}">${escHtml(r.name)} (${escHtml(r.kind)})</option>`),
+  const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
+
+  const resourceOptions = (selectedId) => [
+    `<option value=""${!selectedId ? ' selected' : ''}>— unassigned —</option>`,
+    ...resources.map(r =>
+      `<option value="${r.id}"${r.id === selectedId ? ' selected' : ''}>${escHtml(r.name)} (${escHtml(r.kind)})</option>`
+    ),
   ].join('');
 
-  const statusOptions = ['todo', 'in_progress', 'blocked', 'done']
-    .map(s => `<option value="${s}">${s.replace('_', ' ')}</option>`).join('');
+  const statusOptions = (selected) => ['todo', 'in_progress', 'blocked', 'done']
+    .map(s => `<option value="${s}"${s === selected ? ' selected' : ''}>${s.replace('_', ' ')}</option>`)
+    .join('');
 
-  const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
+  const taskRows = tasks.map(t => {
+    const res = resourceById[t.resource_id];
+    if (t.id === editingTaskId) {
+      return `<tr class="edit-row" data-id="${t.id}">
+        <td colspan="9">
+          <form class="form-row edit-task-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
+            <div><label>Title</label><input name="title" value="${escHtml(t.title)}" required style="width:160px"></div>
+            <div><label>Resource</label><select name="resource_id">${resourceOptions(t.resource_id)}</select></div>
+            <div><label>Start</label><input type="datetime-local" name="start_date" value="${dtLocal(t.start_date)}"></div>
+            <div><label>End (auto)</label><input type="datetime-local" name="end_date" value="${dtLocal(t.end_date)}" readonly></div>
+            <div><label>Load</label><input type="number" name="load" value="${t.load}" min="0.01" step="any" style="width:70px"></div>
+            <div><label>Duration (h)</label><input type="number" name="duration" value="${t.duration != null ? t.duration : ''}" min="0.01" step="any" style="width:70px" placeholder="—"></div>
+            <div><label>Status</label><select name="status">${statusOptions(t.status)}</select></div>
+            <div style="align-self:flex-end;display:flex;gap:0.25rem">
+              <button type="submit" class="btn btn-primary">Save</button>
+              <button type="button" class="btn btn-ghost cancel-task-edit">Cancel</button>
+            </div>
+          </form>
+        </td>
+      </tr>`;
+    }
+    return `<tr>
+      <td><button class="btn btn-ghost edit-task-btn" data-id="${t.id}" style="padding:0;text-align:left">${escHtml(t.title)}</button></td>
+      <td>
+        <select class="status-select" data-id="${t.id}" style="font-size:0.8rem">
+          ${statusOptions(t.status)}
+        </select>
+      </td>
+      <td>${res ? escHtml(res.name) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
+      <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
+      <td>${t.load}</td>
+      <td>${t.duration != null ? t.duration + 'h' : '—'}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn btn-ghost edit-task-btn" data-id="${t.id}" title="Edit">✎</button>
+        <button class="btn btn-ghost copy-task-btn" data-id="${t.id}" title="Copy">⧉</button>
+        <button class="btn btn-danger delete-task-btn" data-id="${t.id}">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
 
   el.innerHTML = `
     <div style="margin-bottom:1rem">
       <button class="btn btn-ghost back-btn">← Projects</button>
     </div>
     <h1>${escHtml(project.name)}</h1>
-    ${project.description
-      ? `<p style="color:var(--text-muted);margin-bottom:1rem">${escHtml(project.description)}</p>`
-      : ''}
+    ${project.folder ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Folder:</strong> ${escHtml(project.folder)}</p>` : ''}
+    ${project.description ? `<p style="color:var(--text-muted);margin-bottom:1rem">${escHtml(project.description)}</p>` : ''}
 
     <h2 style="margin-top:1.5rem;margin-bottom:0.75rem">Add task</h2>
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
-      <div>
-        <label>Title *</label>
-        <input name="title" required placeholder="Task title" style="width:180px">
-      </div>
-      <div>
-        <label>Resource</label>
-        <select name="resource_id">${resourceOptions}</select>
-      </div>
-      <div>
-        <label>Start</label>
-        <input type="date" name="start_date">
-      </div>
-      <div>
-        <label>End</label>
-        <input type="date" name="end_date">
-      </div>
-      <div>
-        <label>Load</label>
-        <input type="number" name="load" value="1" min="0.1" step="0.5" style="width:70px">
-      </div>
-      <div>
-        <label>Status</label>
-        <select name="status">${statusOptions}</select>
-      </div>
-      <div style="align-self:flex-end">
-        <button type="submit" class="btn btn-primary">Add task</button>
-      </div>
+      <div><label>Title *</label><input name="title" required placeholder="Task title" style="width:180px"></div>
+      <div><label>Resource</label><select name="resource_id">${resourceOptions(null)}</select></div>
+      <div><label>Start</label><input type="datetime-local" name="start_date"></div>
+      <div><label>End (auto)</label><input type="datetime-local" name="end_date" readonly></div>
+      <div><label>Load</label><input type="number" name="load" value="1" min="0.01" step="any" style="width:70px"></div>
+      <div><label>Duration (h)</label><input type="number" name="duration" min="0.01" step="any" style="width:70px" placeholder="—"></div>
+      <div><label>Status</label><select name="status">${statusOptions('todo')}</select></div>
+      <div style="align-self:flex-end"><button type="submit" class="btn btn-primary">Add task</button></div>
     </form>
 
     <h2>Tasks (${tasks.length})</h2>
@@ -136,40 +247,23 @@ async function showProjectDetail(el, projectId) {
       : `<table>
           <thead><tr>
             <th>Title</th><th>Status</th><th>Resource</th>
-            <th>Start</th><th>End</th><th>Load</th><th style="width:80px"></th>
+            <th>Start</th><th>End</th><th>Load</th><th>Duration</th><th style="width:100px"></th>
           </tr></thead>
-          <tbody>
-            ${tasks.map(t => {
-              const res = resourceById[t.resource_id];
-              const statusSel = ['todo', 'in_progress', 'blocked', 'done']
-                .map(s => `<option value="${s}"${s === t.status ? ' selected' : ''}>${s.replace('_', ' ')}</option>`)
-                .join('');
-              return `<tr>
-                <td>${escHtml(t.title)}</td>
-                <td>
-                  <select class="status-select" data-id="${t.id}" style="font-size:0.8rem">
-                    ${statusSel}
-                  </select>
-                </td>
-                <td>${res ? escHtml(res.name) : '<span style="color:var(--text-muted)">—</span>'}</td>
-                <td>${t.start_date || '—'}</td>
-                <td>${t.end_date || '—'}</td>
-                <td>${t.load}</td>
-                <td style="text-align:right">
-                  <button class="btn btn-danger delete-task-btn" data-id="${t.id}">✕</button>
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
+          <tbody>${taskRows}</tbody>
         </table>`}
   `;
 
   el.querySelector('.back-btn').addEventListener('click', () => showProjectsList(el));
 
+  const addForm = el.querySelector('#add-task-form');
+  setupAutoCalcEnd(addForm);
+  setupResourceAutoStart(addForm);
+
   el.querySelector('#add-task-form').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const ridRaw = fd.get('resource_id');
+    const durRaw = fd.get('duration');
     try {
       await api.post('/tasks/', {
         title: fd.get('title'),
@@ -178,13 +272,52 @@ async function showProjectDetail(el, projectId) {
         start_date: fd.get('start_date') || null,
         end_date: fd.get('end_date') || null,
         load: parseFloat(fd.get('load')),
+        duration: durRaw ? parseFloat(durRaw) : null,
         status: fd.get('status'),
       });
       await showProjectDetail(el, projectId);
-    } catch (err) {
-      alert(`Error: ${err.message}`);
-    }
+    } catch (err) { alert(`Error: ${err.message}`); }
   });
+
+  el.querySelectorAll('.edit-task-btn').forEach(btn =>
+    btn.addEventListener('click', () => showProjectDetail(el, projectId, parseInt(btn.dataset.id)))
+  );
+
+  const editTaskForm = el.querySelector('.edit-task-form');
+  if (editTaskForm) {
+    setupAutoCalcEnd(editTaskForm);
+    const editRow = editTaskForm.closest('tr');
+    editTaskForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const ridRaw = fd.get('resource_id');
+      const durRaw = fd.get('duration');
+      try {
+        await api.patch(`/tasks/${editRow.dataset.id}`, {
+          title: fd.get('title'),
+          resource_id: ridRaw ? parseInt(ridRaw) : null,
+          start_date: fd.get('start_date') || null,
+          end_date: fd.get('end_date') || null,
+          load: parseFloat(fd.get('load')),
+          duration: durRaw ? parseFloat(durRaw) : null,
+          status: fd.get('status'),
+        });
+        await showProjectDetail(el, projectId);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    });
+    el.querySelector('.cancel-task-edit').addEventListener('click',
+      () => showProjectDetail(el, projectId)
+    );
+  }
+
+  el.querySelectorAll('.copy-task-btn').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      try {
+        await api.post(`/tasks/${btn.dataset.id}/copy`, {});
+        await showProjectDetail(el, projectId);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    })
+  );
 
   el.querySelectorAll('.status-select').forEach(sel =>
     sel.addEventListener('change', async () => {
@@ -203,9 +336,7 @@ async function showProjectDetail(el, projectId) {
       try {
         await api.delete(`/tasks/${btn.dataset.id}`);
         await showProjectDetail(el, projectId);
-      } catch (err) {
-        alert(`Error: ${err.message}`);
-      }
+      } catch (err) { alert(`Error: ${err.message}`); }
     })
   );
 }
