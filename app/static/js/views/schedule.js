@@ -1,6 +1,6 @@
 // ── Schedule view: Timeline (Gantt) + Utilization heatmap ────────────────
 
-const SCHED_DAY_WIDTH = 28; // pixels per day — must match gantt.py DAY_WIDTH arg
+const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
 
 // ── Date helpers (timezone-safe via Date.UTC) ─────────────────────────────
 
@@ -41,7 +41,93 @@ function schedMonthLabel(dateStr) {
   return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
-// ── Shared date-header (used by both Gantt and Utilization) ───────────────
+// ── Hourly Gantt helpers ──────────────────────────────────────────────────
+
+// Build date+hour header for the hourly Gantt.
+// Row 1: one cell per day spanning 24 hour columns.
+// Row 2: hour numbers 00–23 for every day.
+function buildHourlyHeader(dates, today) {
+  const row1 = dates.map(d => {
+    const [y, mo, day] = d.split('-').map(Number);
+    const label = new Date(y, mo - 1, day)
+      .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const cls = d === today ? ' gantt-today' : '';
+    return `<th class="gantt-month-th${cls}" colspan="24">${label}</th>`;
+  }).join('');
+
+  const row2 = dates.flatMap(d =>
+    Array.from({ length: 24 }, (_, h) => {
+      const cls = d === today ? ' gantt-today' : '';
+      // Label every 6 hours (00, 06, 12, 18); tick only otherwise
+      const label = h % 6 === 0 ? String(h).padStart(2, '0') : '';
+      const fsize = h % 6 === 0 ? '0.7rem' : '0';
+      return `<th class="gantt-day-th${cls}" style="width:${SCHED_HOUR_WIDTH}px;min-width:${SCHED_HOUR_WIDTH}px;font-size:${fsize};padding:1px 0;overflow:hidden">${label}</th>`;
+    })
+  ).join('');
+
+  return `<tr><th class="gantt-label-th"></th>${row1}</tr>
+          <tr><th class="gantt-label-th"></th>${row2}</tr>`;
+}
+
+// Position a task bar within the hourly grid.
+// task.start_date / task.end_date are ISO datetime strings (or null).
+function buildTaskBarHourly(task, fromDate, toDate) {
+  if (!task.start_date) return '';
+
+  const rangeStartMs = Date.UTC(...fromDate.split('-').map(Number).map((v, i) => i === 1 ? v - 1 : v));
+  const rangeEndMs   = rangeStartMs + (schedDaysBetween(fromDate, toDate) + 1) * 86400000;
+  const taskStartMs  = new Date(task.start_date).getTime();
+  const taskEndMs    = task.end_date ? new Date(task.end_date).getTime() : rangeEndMs;
+
+  if (taskStartMs >= rangeEndMs || taskEndMs <= rangeStartMs) return '';
+
+  const effStartMs = Math.max(taskStartMs, rangeStartMs);
+  const effEndMs   = Math.min(taskEndMs, rangeEndMs);
+
+  const leftHours  = (effStartMs - rangeStartMs) / 3600000;
+  const widthHours = Math.max(1, (effEndMs - effStartMs) / 3600000);
+
+  const left  = Math.round(leftHours * SCHED_HOUR_WIDTH);
+  const width = Math.max(SCHED_HOUR_WIDTH, Math.round(widthHours * SCHED_HOUR_WIDTH));
+
+  const startLabel = task.start_date.replace('T', ' ').slice(0, 16);
+  const endLabel   = task.end_date ? task.end_date.replace('T', ' ').slice(0, 16) : '∞';
+
+  return `<div class="gantt-bar bar-${escHtml(task.status)}"
+               style="left:${left}px;width:${width}px"
+               title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}"
+          >${escHtml(task.title)}</div>`;
+}
+
+function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours) {
+  const bars = tasks
+    .filter(t => t.resource_id === resource.id)
+    .map(t => buildTaskBarHourly(t, fromDate, toDate)).join('');
+  const totalW = totalHours * SCHED_HOUR_WIDTH;
+  const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
+  return `<tr>
+    <td class="gantt-label-td">${escHtml(resource.name)}</td>
+    <td class="gantt-track-td" colspan="${totalHours}">
+      <div class="gantt-track" style="width:${totalW}px;background:${grid}">${bars}</div>
+    </td>
+  </tr>`;
+}
+
+function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours) {
+  const unassigned = tasks.filter(t => !t.resource_id && t.start_date);
+  if (!unassigned.length) return '';
+  const bars = unassigned.map(t => buildTaskBarHourly(t, fromDate, toDate)).join('');
+  const totalW = totalHours * SCHED_HOUR_WIDTH;
+  const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
+  return `<tr>
+    <td class="gantt-label-td gantt-unassigned">Unassigned</td>
+    <td class="gantt-track-td" colspan="${totalHours}">
+      <div class="gantt-track" style="width:${totalW}px;background:${grid}">${bars}</div>
+    </td>
+  </tr>`;
+}
+
+// ── Utilization heatmap (unchanged — still day-level) ─────────────────────
 
 function buildDateHeader(dates, today) {
   const months = [];
@@ -68,57 +154,13 @@ function buildDateHeader(dates, today) {
           <tr><th class="gantt-label-th"></th>${row2}</tr>`;
 }
 
-// ── Gantt rendering ───────────────────────────────────────────────────────
-
-function buildTaskBar(task, from, to, dates) {
-  if (!task.start_date || task.start_date > to) return '';
-  const effectiveEnd = task.end_date || to;
-  if (effectiveEnd < from) return '';
-  const fromDay = Math.max(0, schedDaysBetween(from, task.start_date));
-  const toDay   = Math.min(dates.length - 1, schedDaysBetween(from, effectiveEnd));
-  const left    = fromDay * SCHED_DAY_WIDTH;
-  const width   = Math.max(SCHED_DAY_WIDTH, (toDay - fromDay + 1) * SCHED_DAY_WIDTH);
-  return `<div class="gantt-bar bar-${escHtml(task.status)}"
-               style="left:${left}px;width:${width}px"
-               title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]"
-          >${escHtml(task.title)}</div>`;
-}
-
-function buildGanttResourceRow(resource, tasks, from, to, dates) {
-  const bars = tasks
-    .filter(t => t.resource_id === resource.id)
-    .map(t => buildTaskBar(t, from, to, dates)).join('');
-  const totalW = dates.length * SCHED_DAY_WIDTH;
-  return `<tr>
-    <td class="gantt-label-td">${escHtml(resource.name)}</td>
-    <td class="gantt-track-td" colspan="${dates.length}">
-      <div class="gantt-track" style="width:${totalW}px">${bars}</div>
-    </td>
-  </tr>`;
-}
-
-function buildUnassignedRow(tasks, from, to, dates) {
-  const unassigned = tasks.filter(t => !t.resource_id && t.start_date);
-  if (!unassigned.length) return '';
-  const bars = unassigned.map(t => buildTaskBar(t, from, to, dates)).join('');
-  const totalW = dates.length * SCHED_DAY_WIDTH;
-  return `<tr>
-    <td class="gantt-label-td gantt-unassigned">Unassigned</td>
-    <td class="gantt-track-td" colspan="${dates.length}">
-      <div class="gantt-track" style="width:${totalW}px">${bars}</div>
-    </td>
-  </tr>`;
-}
-
-// ── Utilization heatmap ───────────────────────────────────────────────────
-
 function utilizationColor(pct) {
   if (pct <= 0)  return { bg: '#f8f9fa', fg: '#adb5bd' };
   if (pct < 60)  return { bg: '#d1e7dd', fg: '#0a3622' };
   if (pct < 80)  return { bg: '#a3cfbb', fg: '#0a3622' };
   if (pct < 100) return { bg: '#ffc107', fg: '#212529' };
   if (pct === 100) return { bg: '#fd7e14', fg: 'white' };
-  return { bg: '#dc3545', fg: 'white' };   // over-allocated
+  return { bg: '#dc3545', fg: 'white' };
 }
 
 function buildUtilResourceRow(resource, conflictsByDay, today) {
@@ -139,7 +181,7 @@ function buildUtilResourceRow(resource, conflictsByDay, today) {
       tooltip += `\n⚠ Over by ${cdata.overage.toFixed(1)} — ${names}`;
     }
 
-    const todayCls = day.day === today ? ' gantt-today' : '';
+    const todayCls    = day.day === today ? ' gantt-today' : '';
     const conflictCls = isConflict ? ' util-conflict' : '';
 
     return `<td class="util-cell${conflictCls}${todayCls}"
@@ -190,24 +232,30 @@ function buildUtilHtml(utilData, conflictsMap, dates, today) {
 // ── Main view ─────────────────────────────────────────────────────────────
 
 async function showSchedule(el) {
-  const today = schedTodayStr();
+  const today   = schedTodayStr();
   let from      = today;
-  let to        = schedAddDays(today, 27);
+  let numDays   = 3;
   let activeTab = 'gantt';
   let renderGen = 0;
 
   async function render() {
     const gen = ++renderGen;
+    const to  = schedAddDays(from, numDays - 1);
 
     el.innerHTML = `
       <h1>Schedule</h1>
-      <form id="schedule-form" class="form-row" style="margin-bottom:0.75rem">
-        <div><label>From</label><input type="date" name="from" value="${from}" required></div>
-        <div><label>To</label><input type="date" name="to" value="${to}" required></div>
-        <div style="align-self:flex-end">
-          <button type="submit" class="btn btn-primary">View</button>
+      <div class="form-row" style="margin-bottom:0.75rem;align-items:center;flex-wrap:wrap;gap:0.5rem">
+        <button id="btn-prev" class="btn btn-ghost" title="Previous day">‹ Prev</button>
+        <div><label>From</label><input type="date" id="from-input" value="${from}"></div>
+        <span style="color:var(--text-muted);font-size:0.85rem;align-self:center">→ ${to}</span>
+        <button id="btn-next" class="btn btn-ghost" title="Next day">Next ›</button>
+        <div style="display:flex;align-items:center;gap:0.3rem">
+          <label style="margin:0">Show</label>
+          <input type="number" id="days-input" value="${numDays}" min="1" max="90"
+                 style="width:55px">
+          <span style="font-size:0.85rem;color:var(--text-muted)">days</span>
         </div>
-      </form>
+      </div>
       <div class="tab-bar">
         <button class="tab-btn${activeTab === 'gantt' ? ' active' : ''}" id="tab-gantt">Timeline</button>
         <button class="tab-btn${activeTab === 'utilization' ? ' active' : ''}" id="tab-util">Utilization</button>
@@ -215,13 +263,18 @@ async function showSchedule(el) {
       <div id="view-body" style="padding-top:0.75rem"><p class="loading">Loading…</p></div>
     `;
 
-    el.querySelector('#schedule-form').addEventListener('submit', async e => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const nf = fd.get('from'), nt = fd.get('to');
-      if (nf > nt) { alert("'From' must not be after 'To'."); return; }
-      from = nf; to = nt;
-      await render();
+    el.querySelector('#btn-prev').addEventListener('click', async () => {
+      from = schedAddDays(from, -1); await render();
+    });
+    el.querySelector('#btn-next').addEventListener('click', async () => {
+      from = schedAddDays(from, 1); await render();
+    });
+    el.querySelector('#from-input').addEventListener('change', async e => {
+      from = e.target.value; await render();
+    });
+    el.querySelector('#days-input').addEventListener('change', async e => {
+      const n = parseInt(e.target.value);
+      if (n >= 1) { numDays = n; await render(); }
     });
 
     el.querySelector('#tab-gantt').addEventListener('click', async () => {
@@ -234,11 +287,11 @@ async function showSchedule(el) {
       activeTab = 'utilization'; await render();
     });
 
-    if (activeTab === 'gantt') await renderGantt(gen);
-    else await renderUtilization(gen);
+    if (activeTab === 'gantt') await renderGantt(gen, to);
+    else await renderUtilization(gen, to);
   }
 
-  async function renderGantt(gen) {
+  async function renderGantt(gen, to) {
     let resources, tasks;
     try {
       [resources, tasks] = await Promise.all([api.get('/resources/'), api.get('/tasks/')]);
@@ -257,11 +310,12 @@ async function showSchedule(el) {
       return;
     }
 
-    const dates = schedGenerateDates(from, to);
-    const thead = buildDateHeader(dates, today);
+    const dates      = schedGenerateDates(from, to);
+    const totalHours = dates.length * 24;
+    const thead      = buildHourlyHeader(dates, today);
     const tbody = [
-      ...resources.map(r => buildGanttResourceRow(r, tasks, from, to, dates)),
-      buildUnassignedRow(tasks, from, to, dates),
+      ...resources.map(r => buildGanttResourceRowHourly(r, tasks, from, to, totalHours)),
+      buildUnassignedRowHourly(tasks, from, to, totalHours),
     ].join('');
 
     body.innerHTML = `
@@ -270,7 +324,7 @@ async function showSchedule(el) {
         <span class="gantt-legend-item"><span class="gantt-swatch bar-in_progress"></span>In progress</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-blocked"></span>Blocked</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-done"></span>Done</span>
-        <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Today highlighted blue</span>
+        <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Today highlighted blue · hover bar for times</span>
       </div>
       <div class="gantt-scroll-wrapper">
         <table class="gantt-table">
@@ -280,7 +334,7 @@ async function showSchedule(el) {
       </div>`;
   }
 
-  async function renderUtilization(gen) {
+  async function renderUtilization(gen, to) {
     let utilData;
     try {
       utilData = await api.get(`/utilization?from=${from}&to=${to}`);
@@ -291,7 +345,6 @@ async function showSchedule(el) {
       return;
     }
 
-    // Fetch conflicts for over-allocated resources (best-effort)
     const conflictsMap = {};
     const overResources = utilData.filter(r => r.days.some(d => d.committed > d.capacity));
     if (overResources.length) {
@@ -313,7 +366,7 @@ async function showSchedule(el) {
     const body = document.getElementById('view-body');
     if (!body) return;
 
-    const dates = schedGenerateDates(from, to);
+    const dates = schedGenerateDates(from, to);  // to is the parameter
     body.innerHTML = buildUtilHtml(utilData, conflictsMap, dates, today);
   }
 

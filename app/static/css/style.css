@@ -195,6 +195,24 @@ input:focus, select:focus, textarea:focus {
   outline-offset: -1px;
 }
 
+/* Hide browser spinner arrows on all number inputs */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Auto-computed readonly field */
+input[readonly] {
+  background: #e9ecef;
+  color: var(--text-muted);
+  cursor: default;
+}
+
 /* ── Status badges ──────────────────────────────────────────────────────── */
 
 .badge {

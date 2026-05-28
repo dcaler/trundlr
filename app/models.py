@@ -32,6 +32,7 @@ class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = Field(default=None)
+    folder: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=_utcnow)
 
     tasks: list["Task"] = Relationship(back_populates="project")
@@ -55,11 +56,14 @@ class Task(SQLModel, table=True):
     status: TaskStatus = Field(default=TaskStatus.todo)
     # Both nullable: a task may be unscheduled, and an open-ended task
     # (start with no end) is a valid, supported state for the engine.
-    start_date: Optional[date] = Field(default=None)
-    end_date: Optional[date] = Field(default=None)
+    # Stored as datetime for hour-precision scheduling.
+    start_date: Optional[datetime] = Field(default=None)
+    end_date: Optional[datetime] = Field(default=None)
     # Units consumed per day while active, in the same unit as the
     # assigned resource's capacity (human -> hours/day; compute -> slots).
     load: float = Field(default=1.0)
+    # Total elapsed calendar duration in hours (informational, not used by engine).
+    duration: Optional[float] = Field(default=None)
 
     # A task must belong to a project; it need not be assigned a resource.
     project_id: int = Field(foreign_key="project.id", nullable=False, index=True)

@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models import Resource, Task
 from app.scheduling import compute_utilization, resource_conflicts, resource_schedule
 from app.schemas import ConflictRead, DayUtilizationRead, ResourceScheduleRead
+from app.validation import MAX_RANGE_DAYS, DBId
 
 router = APIRouter(tags=["schedule"])
 
@@ -15,11 +16,18 @@ router = APIRouter(tags=["schedule"])
 def _require_valid_range(from_date: date, to_date: date) -> None:
     if from_date > to_date:
         raise HTTPException(status_code=422, detail="'from' must not be after 'to'")
+    # Cap the window: the engine materialises one row per day, so an unbounded
+    # range would let a single request exhaust memory/CPU.
+    if (to_date - from_date).days + 1 > MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"date range must not exceed {MAX_RANGE_DAYS} days",
+        )
 
 
 @router.get("/api/resources/{resource_id}/schedule", response_model=List[DayUtilizationRead])
 def get_resource_schedule(
-    resource_id: int,
+    resource_id: int = DBId(),
     from_date: date = Query(..., alias="from"),
     to_date: date = Query(..., alias="to"),
     session: Session = Depends(get_db),
@@ -33,7 +41,7 @@ def get_resource_schedule(
 
 @router.get("/api/resources/{resource_id}/conflicts", response_model=List[ConflictRead])
 def get_resource_conflicts(
-    resource_id: int,
+    resource_id: int = DBId(),
     from_date: date = Query(..., alias="from"),
     to_date: date = Query(..., alias="to"),
     session: Session = Depends(get_db),
