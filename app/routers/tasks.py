@@ -35,6 +35,8 @@ def create_task(data: TaskCreate, session: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     if data.resource_id is not None and not session.get(Resource, data.resource_id):
         raise HTTPException(status_code=404, detail="Resource not found")
+    if data.depends_on_id is not None and not session.get(Task, data.depends_on_id):
+        raise HTTPException(status_code=404, detail="Dependency task not found")
     task = Task(**data.model_dump())
     session.add(task)
     session.commit()
@@ -58,6 +60,9 @@ def update_task(
     if "resource_id" in updates and updates["resource_id"] is not None:
         if not session.get(Resource, updates["resource_id"]):
             raise HTTPException(status_code=404, detail="Resource not found")
+    if "depends_on_id" in updates and updates["depends_on_id"] is not None:
+        if not session.get(Task, updates["depends_on_id"]):
+            raise HTTPException(status_code=404, detail="Dependency task not found")
 
     for key, value in updates.items():
         setattr(task, key, value)
