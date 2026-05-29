@@ -54,6 +54,10 @@ def apply_migrations(engine):
             conn.execute(text("ALTER TABLE task ADD COLUMN depends_on_id INTEGER REFERENCES task(id)"))
             conn.commit()
 
+        if "description" not in task_cols:
+            conn.execute(text("ALTER TABLE task ADD COLUMN description TEXT"))
+            conn.commit()
+
         for col in ("start_date", "end_date"):
             conn.execute(text(
                 f"UPDATE task SET {col} = {col} || ' 00:00:00' "

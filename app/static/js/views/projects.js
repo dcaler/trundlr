@@ -216,6 +216,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         <td colspan="9">
           <form class="form-row edit-task-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
             <div><label>Title</label><input name="title" value="${escHtml(t.title)}" required style="width:160px"></div>
+            <div><label>Description / Command</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description or shell command"></div>
             <div><label>Resource</label><select name="resource_id">${resourceOptions(t.resource_id)}</select></div>
             <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(t.depends_on_id, t.id)}</select></div>
             <div><label>Start</label><input type="datetime-local" name="start_date" value="${dtLocal(t.start_date)}"></div>
@@ -232,7 +233,10 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       </tr>`;
     }
     return `<tr>
-      <td><button class="btn btn-ghost edit-task-btn" data-id="${t.id}" style="padding:0;text-align:left">${escHtml(t.title)}</button></td>
+      <td>
+        <button class="btn btn-ghost edit-task-btn" data-id="${t.id}" style="padding:0;text-align:left">${escHtml(t.title)}</button>
+        ${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px;font-family:monospace">${escHtml(t.description)}</div>` : ''}
+      </td>
       <td>
         <select class="status-select" data-id="${t.id}" style="font-size:0.8rem">
           ${statusOptions(t.status)}
@@ -263,6 +267,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     <h2 style="margin-top:1.5rem;margin-bottom:0.75rem">Add task</h2>
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
       <div><label>Title *</label><input name="title" required placeholder="Task title" style="width:180px"></div>
+      <div><label>Description / Command</label><input name="description" placeholder="Optional description or shell command" style="width:240px"></div>
       <div><label>Resource</label><select name="resource_id">${resourceOptions(null)}</select></div>
       <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(null, null)}</select></div>
       <div><label>Start</label><input type="datetime-local" name="start_date"></div>
@@ -301,6 +306,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       const depRaw = fd.get('depends_on_id');
       await api.post('/tasks/', {
         title: fd.get('title'),
+        description: fd.get('description') || null,
         project_id: projectId,
         resource_id: ridRaw ? parseInt(ridRaw) : null,
         depends_on_id: depRaw ? parseInt(depRaw) : null,
@@ -332,6 +338,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         const depRaw2 = fd.get('depends_on_id');
         await api.patch(`/tasks/${editRow.dataset.id}`, {
           title: fd.get('title'),
+          description: fd.get('description') || null,
           resource_id: ridRaw ? parseInt(ridRaw) : null,
           depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
           start_date: fd.get('start_date') || null,

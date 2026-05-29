@@ -111,6 +111,7 @@ def copy_task(task_id: int = DBId(), session: Session = Depends(get_db)):
 
     new_task = Task(
         title=f"{task.title} (copy)",
+        description=task.description,
         start_date=new_start,
         end_date=new_end,
         load=task.load,

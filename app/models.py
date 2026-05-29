@@ -53,6 +53,7 @@ class Resource(SQLModel, table=True):
 class Task(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str
+    description: Optional[str] = Field(default=None)
     status: TaskStatus = Field(default=TaskStatus.todo)
     # Both nullable: a task may be unscheduled, and an open-ended task
     # (start with no end) is a valid, supported state for the engine.
