@@ -93,9 +93,10 @@ function buildTaskBarHourly(task, fromDate, toDate) {
   const startLabel = task.start_date.replace('T', ' ').slice(0, 16);
   const endLabel   = task.end_date ? task.end_date.replace('T', ' ').slice(0, 16) : '∞';
 
+  const descLine = task.description ? `\n${escHtml(task.description)}` : '';
   return `<div class="gantt-bar bar-${escHtml(task.status)}"
                style="left:${left}px;width:${width}px"
-               title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}"
+               title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}${descLine}"
           >${escHtml(task.title)}</div>`;
 }
 
