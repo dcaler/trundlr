@@ -21,7 +21,11 @@ function setupAutoCalcEnd(form) {
   function calc() {
     if (!startEl.value || !durEl.value) { endEl.value = ''; return; }
     const ms = new Date(startEl.value).getTime() + parseFloat(durEl.value) * 3_600_000;
-    if (!isNaN(ms)) endEl.value = new Date(ms).toISOString().slice(0, 16);
+    if (!isNaN(ms)) {
+      const d = new Date(ms);
+      const p = n => String(n).padStart(2, '0');
+      endEl.value = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
   }
   startEl.addEventListener('change', calc);
   durEl.addEventListener('change', calc);
