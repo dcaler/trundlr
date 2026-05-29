@@ -61,6 +61,40 @@ def apply_migrations(engine):
             conn.execute(text("ALTER TABLE task ADD COLUMN description TEXT"))
             conn.commit()
 
+        # Make resource.capacity nullable if the DB was created with the old schema
+        # (capacity was NOT NULL). SQLite can't ALTER COLUMN, so we recreate the table.
+        result = conn.execute(text("PRAGMA table_info(resource)"))
+        resource_info = list(result)
+        capacity_row = next((r for r in resource_info if r[1] == "capacity"), None)
+        if capacity_row and capacity_row[3] == 1:  # notnull flag == 1 → NOT NULL
+            existing_col_names = {r[1] for r in resource_info}
+            avail_ddl = (
+                ", available_from TEXT, available_to TEXT, available_days INTEGER"
+                if "available_from" in existing_col_names else ""
+            )
+            avail_sel = (
+                ", available_from, available_to, available_days"
+                if "available_from" in existing_col_names else ""
+            )
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(text(f"""
+                CREATE TABLE resource_new (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR NOT NULL,
+                    kind VARCHAR(5) NOT NULL,
+                    capacity REAL{avail_ddl}
+                )
+            """))
+            conn.execute(text(
+                f"INSERT INTO resource_new (id, name, kind, capacity{avail_sel})"
+                f" SELECT id, name, kind, capacity{avail_sel} FROM resource"
+            ))
+            conn.execute(text("DROP TABLE resource"))
+            conn.execute(text("ALTER TABLE resource_new RENAME TO resource"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_resource_name ON resource (name)"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.commit()
+
         result = conn.execute(text("PRAGMA table_info(resource)"))
         resource_cols = {row[1] for row in result}
         if "available_from" not in resource_cols:
