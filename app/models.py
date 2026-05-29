@@ -54,6 +54,11 @@ class Resource(SQLModel, table=True):
     tasks: list["Task"] = Relationship(back_populates="resource")
 
 
+class AppSettings(SQLModel, table=True):
+    id: int = Field(default=1, primary_key=True)
+    timezone: str = Field(default="UTC")
+
+
 class Task(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str
