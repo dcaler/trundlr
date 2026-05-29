@@ -50,5 +50,12 @@ async function navigate() {
   }
 }
 
+// Current app settings — populated before first render, updated by settings view.
+// eslint-disable-next-line no-unused-vars
+let appSettings = { timezone: 'UTC' };
+
 window.addEventListener('hashchange', navigate);
-window.addEventListener('DOMContentLoaded', navigate);
+window.addEventListener('DOMContentLoaded', async () => {
+  try { appSettings = await api.get('/settings/'); } catch (_) { /* use defaults */ }
+  navigate();
+});

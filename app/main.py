@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import apply_migrations, create_db_and_tables, init_engine
-from app.routers import projects, resources, schedule, tasks
+from app.routers import projects, resources, schedule, settings, tasks
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -70,3 +70,4 @@ app.include_router(projects.router)
 app.include_router(resources.router)
 app.include_router(tasks.router)
 app.include_router(schedule.router)
+app.include_router(settings.router)

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import List
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -7,7 +8,7 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import Resource, Task
+from app.models import AppSettings, Resource, Task
 from app.schemas import ResourceCreate, ResourceRead, ResourceUpdate
 from app.validation import DBId
 
@@ -75,6 +76,9 @@ def get_resource_calendar(resource_id: int = DBId(), session: Session = Depends(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
 
+    app_settings = session.get(AppSettings, 1)
+    tz = ZoneInfo(app_settings.timezone if app_settings else "UTC")
+
     tasks = session.exec(
         select(Task).where(Task.resource_id == resource_id)
     ).all()
@@ -83,14 +87,16 @@ def get_resource_calendar(resource_id: int = DBId(), session: Session = Depends(
     cal.add("prodid", f"-//Trundlr//Resource {resource_id}//EN")
     cal.add("version", "2.0")
     cal.add("x-wr-calname", resource.name)
+    cal.add("x-wr-timezone", str(tz))
 
     now = datetime.now(timezone.utc)
     for task in tasks:
         if task.start_date is None:
             continue
-        start = task.start_date if task.start_date.tzinfo else task.start_date.replace(tzinfo=timezone.utc)
+        # Treat stored naive datetimes as being in the configured timezone
+        start = task.start_date.replace(tzinfo=tz) if not task.start_date.tzinfo else task.start_date.astimezone(tz)
         if task.end_date:
-            end = task.end_date if task.end_date.tzinfo else task.end_date.replace(tzinfo=timezone.utc)
+            end = task.end_date.replace(tzinfo=tz) if not task.end_date.tzinfo else task.end_date.astimezone(tz)
         else:
             end = start + timedelta(hours=1)
 
