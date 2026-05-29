@@ -12,8 +12,8 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 @router.get("/", response_model=List[ProjectRead])
-def list_projects(session: Session = Depends(get_db)):
-    return session.exec(select(Project)).all()
+def list_projects(archived: bool = False, session: Session = Depends(get_db)):
+    return session.exec(select(Project).where(Project.archived == archived)).all()
 
 
 @router.post("/", response_model=ProjectRead, status_code=201)
@@ -86,3 +86,27 @@ def copy_project(project_id: int = DBId(), session: Session = Depends(get_db)):
     session.commit()
     session.refresh(new_project)
     return new_project
+
+
+@router.post("/{project_id}/archive", response_model=ProjectRead)
+def archive_project(project_id: int = DBId(), session: Session = Depends(get_db)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.archived = True
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+
+
+@router.post("/{project_id}/unarchive", response_model=ProjectRead)
+def unarchive_project(project_id: int = DBId(), session: Session = Depends(get_db)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.archived = False
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
