@@ -18,7 +18,7 @@ from typing import Iterable, Iterator, Optional
 
 from sqlmodel import Session, select
 
-from app.models import Resource, Task
+from app.models import Resource, ResourceKind, Task
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,24 @@ class DayUtilization:
     committed: float  # summed load of tasks active that day (same unit as capacity)
     capacity: float  # the resource's capacity for that day
     utilization: float  # committed / capacity * 100, a percentage (>100 => over-allocated)
+
+
+def resource_capacity_on_day(resource: Resource, day: date) -> float:
+    """Effective capacity of a resource on a specific day.
+
+    For human resources: derived from the availability window if that day-of-week
+    is flagged in available_days; returns 0.0 on unavailable days. For cpu/gpu:
+    always returns the stored capacity.
+    """
+    if resource.kind in (ResourceKind.human, ResourceKind.ai):
+        if not resource.available_days or not (resource.available_days & (1 << day.weekday())):
+            return 0.0
+        if not resource.available_from or not resource.available_to:
+            return 0.0
+        fh, fm = map(int, resource.available_from.split(":"))
+        th, tm = map(int, resource.available_to.split(":"))
+        return (th * 60 + tm - fh * 60 - fm) / 60.0
+    return resource.capacity or 0.0
 
 
 def _as_date(d: date | datetime) -> date:
@@ -75,12 +93,10 @@ def compute_utilization(
     inclusive of both endpoints; an inverted range (start > end) yields [].
     """
     assigned = [t for t in tasks if t.resource_id == resource.id]
-    capacity = resource.capacity
     result: list[DayUtilization] = []
     for day in _days(start, end):
         committed = daily_committed_load(assigned, day)
-        # capacity > 0 is guaranteed by the API layer; guard the degenerate
-        # model-level case so a stray 0-capacity resource can't divide-by-zero.
+        capacity = resource_capacity_on_day(resource, day)
         if capacity > 0:
             utilization = committed / capacity * 100.0
         else:

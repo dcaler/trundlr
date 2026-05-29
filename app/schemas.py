@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from typing import Annotated, Optional
 
@@ -29,6 +30,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[NonEmptyStr] = None
     description: Optional[str] = None
     folder: Optional[str] = None
+    archived: Optional[bool] = None
 
 
 class ProjectRead(BaseModel):
@@ -36,28 +38,71 @@ class ProjectRead(BaseModel):
     name: str
     description: Optional[str] = None
     folder: Optional[str] = None
+    archived: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
+_TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
+
+def _validate_time_str(value: str, field: str) -> None:
+    if not _TIME_RE.match(value):
+        raise ValueError(f"{field} must be in HH:MM format")
+    h, m = map(int, value.split(":"))
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"{field} is not a valid time")
+
+
 class ResourceCreate(BaseModel):
     name: NonEmptyStr
     kind: ResourceKind
-    capacity: PositiveFloat
+    capacity: Optional[PositiveFloat] = None
+    available_from: Optional[str] = None
+    available_to: Optional[str] = None
+    available_days: Optional[int] = None  # bitmask bit 0=Mon … bit 6=Sun
+
+    @model_validator(mode="after")
+    def validate_kind_fields(self) -> "ResourceCreate":
+        if self.kind in (ResourceKind.human, ResourceKind.ai):
+            if self.capacity is not None:
+                raise ValueError("capacity is not used for human/AI resources; use available_from/available_to/available_days")
+            if not self.available_from or not self.available_to or self.available_days is None:
+                raise ValueError("human/AI resources require available_from, available_to, and available_days")
+            _validate_time_str(self.available_from, "available_from")
+            _validate_time_str(self.available_to, "available_to")
+            fh, fm = map(int, self.available_from.split(":"))
+            th, tm = map(int, self.available_to.split(":"))
+            if (th * 60 + tm) <= (fh * 60 + fm):
+                raise ValueError("available_to must be later than available_from")
+            if not (1 <= self.available_days <= 127):
+                raise ValueError("available_days must be a bitmask between 1 and 127")
+        else:
+            if self.capacity is None:
+                raise ValueError(f"{self.kind} resources require capacity")
+            if any(f is not None for f in [self.available_from, self.available_to, self.available_days]):
+                raise ValueError("availability fields are only valid for human resources")
+        return self
 
 
 class ResourceUpdate(BaseModel):
     name: Optional[NonEmptyStr] = None
     kind: Optional[ResourceKind] = None
     capacity: Optional[PositiveFloat] = None
+    available_from: Optional[str] = None
+    available_to: Optional[str] = None
+    available_days: Optional[int] = None
 
 
 class ResourceRead(BaseModel):
     id: int
     name: str
     kind: ResourceKind
-    capacity: float
+    capacity: Optional[float] = None
+    available_from: Optional[str] = None
+    available_to: Optional[str] = None
+    available_days: Optional[int] = None
 
     model_config = {"from_attributes": True}
 

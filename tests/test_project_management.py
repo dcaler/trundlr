@@ -40,8 +40,13 @@ def client():
 def create_project(client, name="Alpha", description=None):
     return client.post("/api/projects/", json={"name": name, "description": description}).json()
 
-def create_resource(client, name="Alice", kind="human", capacity=8.0):
-    return client.post("/api/resources/", json={"name": name, "kind": kind, "capacity": capacity}).json()
+def create_resource(client, name="Alice", kind="human", capacity=None):
+    if kind == "human":
+        body = {"name": name, "kind": kind,
+                "available_from": "09:00", "available_to": "17:00", "available_days": 31}
+    else:
+        body = {"name": name, "kind": kind, "capacity": capacity}
+    return client.post("/api/resources/", json=body).json()
 
 def create_task(client, project_id, title="Task 1", **kwargs):
     return client.post("/api/tasks/", json={"title": title, "project_id": project_id, **kwargs}).json()
@@ -106,8 +111,8 @@ def test_assign_with_dates_and_load(client):
         load=2.0,
     )
     assert t["resource_id"] == r["id"]
-    assert t["start_date"] == "2026-06-01"
-    assert t["end_date"] == "2026-06-07"
+    assert t["start_date"].startswith("2026-06-01")
+    assert t["end_date"].startswith("2026-06-07")
     assert t["load"] == pytest.approx(2.0)
 
 
@@ -181,7 +186,7 @@ def test_full_flow(client):
     # Assert all fields
     assert task["project_id"] == project["id"]
     assert task["resource_id"] == resource["id"]
-    assert task["start_date"] == "2026-07-01"
+    assert task["start_date"].startswith("2026-07-01")
     assert task["load"] == pytest.approx(4.0)
     assert task["status"] == "in_progress"
 

@@ -1,6 +1,9 @@
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
@@ -63,6 +66,45 @@ def get_next_available(resource_id: int = DBId(), session: Session = Depends(get
     ]
     next_dt = max(candidates) if candidates else None
     return {"next_available": next_dt.isoformat() if next_dt else None}
+
+
+@router.get("/{resource_id}/calendar.ics")
+def get_resource_calendar(resource_id: int = DBId(), session: Session = Depends(get_db)):
+    """iCal feed of all scheduled tasks for this resource."""
+    resource = session.get(Resource, resource_id)
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    tasks = session.exec(
+        select(Task).where(Task.resource_id == resource_id)
+    ).all()
+
+    cal = Calendar()
+    cal.add("prodid", f"-//Trundlr//Resource {resource_id}//EN")
+    cal.add("version", "2.0")
+    cal.add("x-wr-calname", resource.name)
+
+    now = datetime.now(timezone.utc)
+    for task in tasks:
+        if task.start_date is None:
+            continue
+        start = task.start_date if task.start_date.tzinfo else task.start_date.replace(tzinfo=timezone.utc)
+        if task.end_date:
+            end = task.end_date if task.end_date.tzinfo else task.end_date.replace(tzinfo=timezone.utc)
+        else:
+            end = start + timedelta(hours=1)
+
+        ev = Event()
+        ev.add("summary", task.title)
+        if task.description:
+            ev.add("description", task.description)
+        ev.add("dtstart", start)
+        ev.add("dtend", end)
+        ev.add("uid", f"task-{task.id}@trundlr")
+        ev.add("dtstamp", now)
+        cal.add_component(ev)
+
+    return Response(content=cal.to_ical(), media_type="text/calendar; charset=utf-8")
 
 
 @router.delete("/{resource_id}", status_code=204)

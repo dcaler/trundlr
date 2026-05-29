@@ -39,8 +39,13 @@ def client():
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def mk_project(c): return c.post("/api/projects/", json={"name": "P"}).json()
-def mk_resource(c, name, kind, cap):
-    return c.post("/api/resources/", json={"name": name, "kind": kind, "capacity": cap}).json()
+def mk_resource(c, name, kind, cap=None):
+    if kind == "human":
+        body = {"name": name, "kind": kind,
+                "available_from": "09:00", "available_to": "17:00", "available_days": 31}
+    else:
+        body = {"name": name, "kind": kind, "capacity": cap}
+    return c.post("/api/resources/", json=body).json()
 def mk_task(c, proj_id, res_id, start, end, load, title="T"):
     return c.post("/api/tasks/", json={
         "title": title, "project_id": proj_id, "resource_id": res_id,
@@ -81,14 +86,15 @@ def test_fully_booked_shows_exactly_100_pct(client):
 
 
 def test_empty_resource_shows_zero_utilization(client):
-    mk_resource(client, "Idle", "human", 8.0)
+    mk_resource(client, "Idle", "human")
     resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-03"})
     idle = next(r for r in resp.json() if r["resource_name"] == "Idle")
+    # Jun 1-2 are Mon-Tue (capacity 8h); Jun 3 is Wed — all have 0 committed load.
     assert all(d["utilization"] == pytest.approx(0.0) for d in idle["days"])
 
 
 def test_utilization_includes_all_resources(client):
-    mk_resource(client, "A", "human", 8.0)
+    mk_resource(client, "A", "human")
     mk_resource(client, "B", "gpu", 4.0)
     resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-01"})
     names = {r["resource_name"] for r in resp.json()}
@@ -170,7 +176,7 @@ def test_conflict_overage_value(client):
 def test_human_hours_over_allocation_flagged(client):
     """Humans (hours/day) use the same detection path as GPU slots."""
     proj = mk_project(client)
-    alice = mk_resource(client, "Alice", "human", 8.0)
+    alice = mk_resource(client, "Alice", "human")
     mk_task(client, proj["id"], alice["id"], "2026-06-01", "2026-06-01", 5.0, "A")
     mk_task(client, proj["id"], alice["id"], "2026-06-01", "2026-06-01", 5.0, "B")
 

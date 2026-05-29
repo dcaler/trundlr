@@ -40,6 +40,9 @@ def apply_migrations(engine):
         if "folder" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN folder TEXT"))
             conn.commit()
+        if "archived" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"))
+            conn.commit()
 
         result = conn.execute(text("PRAGMA table_info(task)"))
         task_cols = {row[1] for row in result}
@@ -56,6 +59,20 @@ def apply_migrations(engine):
 
         if "description" not in task_cols:
             conn.execute(text("ALTER TABLE task ADD COLUMN description TEXT"))
+            conn.commit()
+
+        result = conn.execute(text("PRAGMA table_info(resource)"))
+        resource_cols = {row[1] for row in result}
+        if "available_from" not in resource_cols:
+            conn.execute(text("ALTER TABLE resource ADD COLUMN available_from TEXT"))
+            conn.execute(text("ALTER TABLE resource ADD COLUMN available_to TEXT"))
+            conn.execute(text("ALTER TABLE resource ADD COLUMN available_days INTEGER"))
+            # Seed defaults for existing human resources
+            conn.execute(text(
+                "UPDATE resource SET available_from='09:00', available_to='17:00', "
+                "available_days=31 WHERE kind='human'"
+            ))
+            conn.execute(text("UPDATE resource SET capacity=NULL WHERE kind='human'"))
             conn.commit()
 
         for col in ("start_date", "end_date"):

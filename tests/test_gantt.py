@@ -124,9 +124,10 @@ def test_schedule_endpoint_matches_seeded_task(api_client):
     that correctly reflects the task's committed load — the data the Gantt
     reads to verify bar position and height."""
     project = api_client.post("/api/projects/", json={"name": "P"}).json()
-    resource = api_client.post(
-        "/api/resources/", json={"name": "Alice", "kind": "human", "capacity": 8.0}
-    ).json()
+    resource = api_client.post("/api/resources/", json={
+        "name": "Alice", "kind": "human",
+        "available_from": "09:00", "available_to": "17:00", "available_days": 31,
+    }).json()
     api_client.post("/api/tasks/", json={
         "title": "Design",
         "project_id": project["id"],
