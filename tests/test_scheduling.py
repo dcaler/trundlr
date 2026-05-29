@@ -9,6 +9,7 @@ from app.models import Project, Resource, ResourceKind, Task
 from app.scheduling import (
     compute_utilization,
     daily_committed_load,
+    resource_capacity_on_day,
     resource_schedule,
     task_active_on,
 )
@@ -16,8 +17,13 @@ from app.scheduling import (
 D = date
 
 
-def _mk_resource(capacity, kind=ResourceKind.human, rid=1):
-    r = Resource(name="r", kind=kind, capacity=capacity)
+def _mk_resource(capacity=None, kind=ResourceKind.human, rid=1,
+                 available_from="09:00", available_to="17:00", available_days=31):
+    if kind == ResourceKind.human:
+        r = Resource(name="r", kind=kind, available_from=available_from,
+                     available_to=available_to, available_days=available_days)
+    else:
+        r = Resource(name="r", kind=kind, capacity=capacity)
     r.id = rid
     return r
 
@@ -117,14 +123,14 @@ CASES = [
         [(4.0, 50.0), (0.0, 0.0), (0.0, 0.0)],
     ),
     (
-        # June has 30 days; task runs Jun 28 -> Jul 2 across the boundary.
+        # Jun 29 (Mon) -> Jul 2 (Thu), checked through Jul 3 (Fri) — crosses month boundary.
         "month_boundary",
         8.0,
         ResourceKind.human,
-        [(2.0, D(2026, 6, 28), D(2026, 7, 2))],
-        D(2026, 6, 28),
+        [(2.0, D(2026, 6, 29), D(2026, 7, 2))],
+        D(2026, 6, 29),
         D(2026, 7, 3),
-        [(2.0, 25.0), (2.0, 25.0), (2.0, 25.0), (2.0, 25.0), (2.0, 25.0), (0.0, 0.0)],
+        [(2.0, 25.0), (2.0, 25.0), (2.0, 25.0), (2.0, 25.0), (0.0, 0.0)],
     ),
     (
         "open_ended_task",
@@ -170,13 +176,17 @@ def test_compute_utilization_table(name, capacity, kind, specs, start, end, expe
     for row, (exp_committed, exp_util) in zip(result, expected):
         assert row.day == expected_day
         assert row.committed == pytest.approx(exp_committed)
-        assert row.capacity == capacity
+        # For compute resources capacity is fixed; for human resources it is
+        # derived per-day (8.0 on weekdays for 09:00-17:00, 0 on weekends).
+        if kind != ResourceKind.human:
+            assert row.capacity == pytest.approx(capacity)
         assert row.utilization == pytest.approx(exp_util)
         expected_day += timedelta(days=1)
 
 
 def test_compute_utilization_filters_by_resource():
-    resource = _mk_resource(8.0, rid=1)
+    # Jun 1 2026 = Monday; 09:00-17:00 → capacity 8 h
+    resource = _mk_resource(rid=1)
     mine = Task(
         title="mine", project_id=1, resource_id=1, load=4.0, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)
     )
@@ -189,8 +199,39 @@ def test_compute_utilization_filters_by_resource():
 
 
 def test_compute_utilization_inverted_range_is_empty():
-    resource = _mk_resource(8.0)
+    resource = _mk_resource()
     assert compute_utilization(resource, [], D(2026, 6, 5), D(2026, 6, 1)) == []
+
+
+# --- resource_capacity_on_day -------------------------------------------------
+
+
+def test_capacity_on_weekday():
+    r = _mk_resource(available_from="09:00", available_to="17:00", available_days=31)
+    assert resource_capacity_on_day(r, D(2026, 6, 1)) == pytest.approx(8.0)  # Monday
+
+
+def test_capacity_on_weekend_is_zero():
+    r = _mk_resource(available_from="09:00", available_to="17:00", available_days=31)
+    assert resource_capacity_on_day(r, D(2026, 6, 6)) == pytest.approx(0.0)  # Saturday
+
+
+def test_capacity_with_custom_hours():
+    r = _mk_resource(available_from="08:30", available_to="16:30", available_days=31)
+    assert resource_capacity_on_day(r, D(2026, 6, 1)) == pytest.approx(8.0)
+
+
+def test_capacity_partial_week():
+    # Only Mon+Tue (bits 0+1 = 3)
+    r = _mk_resource(available_from="09:00", available_to="13:00", available_days=3)
+    assert resource_capacity_on_day(r, D(2026, 6, 1)) == pytest.approx(4.0)  # Monday
+    assert resource_capacity_on_day(r, D(2026, 6, 3)) == pytest.approx(0.0)  # Wednesday
+
+
+def test_capacity_compute_resource():
+    r = _mk_resource(capacity=4.0, kind=ResourceKind.gpu)
+    assert resource_capacity_on_day(r, D(2026, 6, 1)) == pytest.approx(4.0)
+    assert resource_capacity_on_day(r, D(2026, 6, 6)) == pytest.approx(4.0)  # Sat still 4 slots
 
 
 # --- resource_schedule: DB entrypoint -----------------------------------------
@@ -213,7 +254,9 @@ def session():
 
 def test_resource_schedule_db(session):
     project = Project(name="P")
-    resource = Resource(name="Alice", kind=ResourceKind.human, capacity=8.0)
+    # Jun 1-3 2026 = Mon-Wed; 09:00-17:00 Mon-Fri gives 8 h/day capacity
+    resource = Resource(name="Alice", kind=ResourceKind.human,
+                        available_from="09:00", available_to="17:00", available_days=31)
     session.add_all([project, resource])
     session.commit()
     session.add(

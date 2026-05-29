@@ -64,10 +64,10 @@ class TestFullScenario:
     """
     Single project, two resources (human + GPU), multiple tasks.
 
-    Timeline used:
+    Timeline used (all Alice tasks on Mon–Fri; availability 09:00–17:00):
       Jun 01–05: Alice  4h/day "Data collection"     → 50% utilization
-      Jun 03–07: Alice  4h/day "Analysis"             → 50% each day
-      Jun 03–05: Alice  2h/day "Emergency fix" (added later → conflict Jun 3-5)
+      Jun 03–05: Alice  4h/day "Analysis"             → 100% (with Data collection)
+      Jun 04–05: Alice  2h/day "Emergency fix" (added later → conflict Jun 4-5)
       Jun 01–05: GPU    2 slots "Model training A"    → 50%
       Jun 03–07: GPU    2 slots "Model training B"    → 50% (Jun 3–5: full)
       Jun 03–05: GPU    1 slot  "Model eval" (later)  → conflict Jun 3–5
@@ -101,12 +101,15 @@ class TestFullScenario:
         resp = client.post("/api/resources/", json={
             "name": "Alice",
             "kind": "human",
-            "capacity": 8.0,
+            "available_from": "09:00",
+            "available_to": "17:00",
+            "available_days": 31,  # Mon–Fri
         })
         assert resp.status_code == 201
         data = resp.json()
         assert data["kind"] == "human"
-        assert data["capacity"] == pytest.approx(8.0)
+        assert data["available_from"] == "09:00"
+        assert data["available_to"] == "17:00"
         TestFullScenario._alice_id = data["id"]
 
     def test_05_create_gpu_resource(self, client):
@@ -150,7 +153,7 @@ class TestFullScenario:
             "project_id": TestFullScenario._project_id,
             "resource_id": TestFullScenario._alice_id,
             "start_date": "2026-06-03",
-            "end_date": "2026-06-07",
+            "end_date": "2026-06-05",  # Wed–Fri; stays on workdays
             "load": 4.0,
         })
         assert resp.status_code == 201
@@ -298,7 +301,7 @@ class TestFullScenario:
         """Jun 4-5 should now be flagged; Jun 1-3 should not."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/conflicts",
-            params={"from": "2026-06-01", "to": "2026-06-07"},
+            params={"from": "2026-06-01", "to": "2026-06-05"},
         )
         assert resp.status_code == 200
         conflicts = resp.json()

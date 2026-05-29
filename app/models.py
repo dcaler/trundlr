@@ -8,11 +8,12 @@ from sqlmodel import Field, Relationship, SQLModel
 class ResourceKind(str, Enum):
     """What a resource is, which fixes the unit of its capacity/load.
 
-    human -> capacity & load are measured in hours/day
-    cpu / gpu -> capacity & load are measured in parallel slots
+    human / ai -> capacity & load are measured in hours/day (derived from availability)
+    cpu / gpu  -> capacity & load are measured in parallel slots
     """
 
     human = "human"
+    ai = "ai"
     cpu = "cpu"
     gpu = "gpu"
 
@@ -33,6 +34,7 @@ class Project(SQLModel, table=True):
     name: str = Field(index=True)
     description: Optional[str] = Field(default=None)
     folder: Optional[str] = Field(default=None)
+    archived: bool = Field(default=False)
     created_at: datetime = Field(default_factory=_utcnow)
 
     tasks: list["Task"] = Relationship(back_populates="project")
@@ -42,10 +44,12 @@ class Resource(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     kind: ResourceKind
-    # Units available per day. Unit is fixed by `kind`:
-    # human -> hours/day; cpu/gpu -> parallel slots. The scheduling
-    # engine compares this to summed task load on a per-day basis.
-    capacity: float
+    # cpu/gpu: parallel slots (explicit). human: None — derived from availability.
+    capacity: Optional[float] = Field(default=None)
+    # Human availability: time window + day-of-week bitmask (bit 0=Mon … bit 6=Sun).
+    available_from: Optional[str] = Field(default=None)  # "HH:MM"
+    available_to: Optional[str] = Field(default=None)    # "HH:MM"
+    available_days: Optional[int] = Field(default=None)  # bitmask
 
     tasks: list["Task"] = Relationship(back_populates="resource")
 

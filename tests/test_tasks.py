@@ -45,9 +45,10 @@ def project_id_fixture(client):
 
 @pytest.fixture(name="resource_id")
 def resource_id_fixture(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "Alice", "kind": "human", "capacity": 8.0}
-    )
+    resp = client.post("/api/resources/", json={
+        "name": "Alice", "kind": "human",
+        "available_from": "09:00", "available_to": "17:00", "available_days": 31,
+    })
     return resp.json()["id"]
 
 
@@ -80,8 +81,8 @@ def test_create_task_with_resource_and_dates(client, project_id, resource_id):
     assert resp.status_code == 201
     body = resp.json()
     assert body["resource_id"] == resource_id
-    assert body["start_date"] == "2026-06-01"
-    assert body["end_date"] == "2026-06-30"
+    assert body["start_date"].startswith("2026-06-01")
+    assert body["end_date"].startswith("2026-06-30")
     assert body["load"] == 6.0
     assert body["status"] == "in_progress"
 

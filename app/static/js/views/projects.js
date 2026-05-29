@@ -91,6 +91,7 @@ async function showProjectsList(el, editingId = null) {
       <td style="white-space:nowrap;text-align:right">
         <button class="btn btn-ghost edit-project-btn" data-id="${p.id}" title="Edit">✎</button>
         <button class="btn btn-ghost copy-project-btn" data-id="${p.id}" title="Duplicate">⧉</button>
+        <button class="btn btn-ghost archive-project-btn" data-id="${p.id}" title="Mark as done / archive" style="color:var(--text-muted)">✓</button>
         <button class="btn btn-danger delete-project-btn" data-id="${p.id}">✕</button>
       </td>
     </tr>`;
@@ -161,6 +162,16 @@ async function showProjectsList(el, editingId = null) {
     btn.addEventListener('click', async () => {
       try {
         await api.post(`/projects/${btn.dataset.id}/copy`, {});
+        await showProjectsList(el);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    })
+  );
+
+  el.querySelectorAll('.archive-project-btn').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      if (!confirm('Mark this project as done and move it to the archive?')) return;
+      try {
+        await api.post(`/projects/${btn.dataset.id}/archive`, {});
         await showProjectsList(el);
       } catch (err) { alert(`Error: ${err.message}`); }
     })

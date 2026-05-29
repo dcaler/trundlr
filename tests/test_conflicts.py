@@ -11,8 +11,12 @@ from app.scheduling import detect_conflicts, resource_conflicts
 D = date
 
 
-def _mk_resource(capacity, kind=ResourceKind.gpu, rid=1):
-    r = Resource(name="r", kind=kind, capacity=capacity)
+def _mk_resource(capacity=None, kind=ResourceKind.gpu, rid=1):
+    if kind == ResourceKind.human:
+        r = Resource(name="r", kind=kind, available_from="09:00",
+                     available_to="17:00", available_days=31)
+    else:
+        r = Resource(name="r", kind=kind, capacity=capacity)
     r.id = rid
     return r
 
@@ -83,7 +87,8 @@ def test_no_conflicts_under_capacity():
 
 def test_human_hours_over_allocation_is_kind_agnostic():
     # Same algorithm flags an over-booked human (hours) as a compute node (slots).
-    human = _mk_resource(8.0, kind=ResourceKind.human)
+    # Jun 1 2026 = Monday; 09:00-17:00 availability gives 8 h capacity.
+    human = _mk_resource(kind=ResourceKind.human)
     tasks = [
         _task("morning", 5.0, D(2026, 6, 1), D(2026, 6, 1)),
         _task("afternoon", 5.0, D(2026, 6, 1), D(2026, 6, 1)),
