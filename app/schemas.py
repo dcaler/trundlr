@@ -1,8 +1,9 @@
 import re
 from datetime import date, datetime
 from typing import Annotated, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models import ResourceKind, TaskStatus
 from app.validation import MAX_DB_INT
@@ -193,3 +194,22 @@ class ResourceScheduleRead(BaseModel):
     resource_id: int
     resource_name: str
     days: list[DayUtilizationRead]
+
+
+class SettingsRead(BaseModel):
+    timezone: str
+
+    model_config = {"from_attributes": True}
+
+
+class SettingsUpdate(BaseModel):
+    timezone: str
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_tz(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ValueError(f"'{v}' is not a valid IANA timezone")
+        return v
