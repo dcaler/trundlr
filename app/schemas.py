@@ -69,6 +69,7 @@ def _validate_date_range(start: Optional[datetime], end: Optional[datetime]) -> 
 
 class TaskCreate(BaseModel):
     title: NonEmptyStr
+    description: Optional[str] = None
     project_id: BodyId
     resource_id: OptionalBodyId = None
     depends_on_id: OptionalBodyId = None
@@ -86,6 +87,7 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     title: Optional[NonEmptyStr] = None
+    description: Optional[str] = None
     resource_id: OptionalBodyId = None
     depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
@@ -103,6 +105,7 @@ class TaskUpdate(BaseModel):
 class TaskRead(BaseModel):
     id: int
     title: str
+    description: Optional[str] = None
     status: TaskStatus
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
