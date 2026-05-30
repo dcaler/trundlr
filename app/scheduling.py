@@ -99,7 +99,9 @@ def compute_utilization(
         if capacity > 0:
             utilization = committed / capacity * 100.0
         else:
-            utilization = float("inf") if committed > 0 else 0.0
+            # capacity=0 (e.g. unavailable day) with load scheduled — use sentinel
+            # so JSON serialization never sees float("inf")
+            utilization = 999.0 if committed > 0 else 0.0
         result.append(
             DayUtilization(day=day, committed=committed, capacity=capacity, utilization=utilization)
         )
