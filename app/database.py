@@ -116,6 +116,17 @@ def apply_migrations(engine):
             ))
         conn.commit()
 
+        # Migrate task.resource_id → taskresource join table (idempotent via INSERT OR IGNORE).
+        # The taskresource table is created by create_db_and_tables; this only copies data
+        # from the old single-resource FK column on DBs that pre-date multi-resource support.
+        result = conn.execute(text("PRAGMA table_info(task)"))
+        if "resource_id" in {row[1] for row in result}:
+            conn.execute(text("""
+                INSERT OR IGNORE INTO taskresource (task_id, resource_id)
+                SELECT id, resource_id FROM task WHERE resource_id IS NOT NULL
+            """))
+            conn.commit()
+
 
 def get_session(engine) -> Generator[Session, None, None]:
     """FastAPI dependency that yields a database session.
