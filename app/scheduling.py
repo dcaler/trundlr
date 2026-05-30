@@ -18,7 +18,7 @@ from typing import Iterable, Iterator, Optional
 
 from sqlmodel import Session, select
 
-from app.models import Resource, ResourceKind, Task
+from app.models import Resource, ResourceKind, Task, TaskResource
 
 
 @dataclass(frozen=True)
@@ -88,14 +88,13 @@ def compute_utilization(
 ) -> list[DayUtilization]:
     """Per-day committed load and utilization for one resource over [start, end].
 
-    Only tasks assigned to `resource` are counted; the function filters the given
-    iterable by resource_id, so callers may pass any task list. The range is
-    inclusive of both endpoints; an inverted range (start > end) yields [].
+    `tasks` must already be pre-filtered to those assigned to `resource`.
+    The range is inclusive of both endpoints; an inverted range yields [].
     """
-    assigned = [t for t in tasks if t.resource_id == resource.id]
+    task_list = list(tasks)
     result: list[DayUtilization] = []
     for day in _days(start, end):
-        committed = daily_committed_load(assigned, day)
+        committed = daily_committed_load(task_list, day)
         capacity = resource_capacity_on_day(resource, day)
         if capacity > 0:
             utilization = committed / capacity * 100.0
@@ -107,19 +106,20 @@ def compute_utilization(
     return result
 
 
+def _tasks_for_resource(session: Session, resource_id: int) -> list[Task]:
+    task_ids = session.exec(
+        select(TaskResource.task_id).where(TaskResource.resource_id == resource_id)
+    ).all()
+    return session.exec(select(Task).where(Task.id.in_(task_ids))).all() if task_ids else []
+
+
 def resource_schedule(
     session: Session, resource_id: int, start: date, end: date
 ) -> Optional[list[DayUtilization]]:
-    """DB entrypoint: load a resource and its tasks, then compute utilization.
-
-    Returns None if the resource does not exist (so the API layer can 404),
-    otherwise the per-day utilization list.
-    """
     resource = session.get(Resource, resource_id)
     if resource is None:
         return None
-    tasks = session.exec(select(Task).where(Task.resource_id == resource_id)).all()
-    return compute_utilization(resource, tasks, start, end)
+    return compute_utilization(resource, _tasks_for_resource(session, resource_id), start, end)
 
 
 @dataclass(frozen=True)
@@ -139,17 +139,14 @@ def detect_conflicts(
 ) -> list[Conflict]:
     """Days in [start, end] where the resource is over-allocated.
 
-    A day is a conflict only when committed load is *strictly greater* than
-    capacity: a fully-booked day (committed == capacity) is not flagged. The
-    strict comparison is the off-by-one guard — using >= would falsely flag
-    exact full booking. For each flagged day the contributing tasks (those
-    active that day, assigned to this resource) are reported.
+    `tasks` must already be pre-filtered to those assigned to `resource`.
+    A day is a conflict only when committed > capacity (full booking is not flagged).
     """
-    assigned = [t for t in tasks if t.resource_id == resource.id]
+    task_list = list(tasks)
     conflicts: list[Conflict] = []
-    for row in compute_utilization(resource, tasks, start, end):
+    for row in compute_utilization(resource, task_list, start, end):
         if row.committed > row.capacity:
-            contributing = [t for t in assigned if task_active_on(t, row.day)]
+            contributing = [t for t in task_list if task_active_on(t, row.day)]
             conflicts.append(
                 Conflict(
                     day=row.day,
@@ -165,13 +162,7 @@ def detect_conflicts(
 def resource_conflicts(
     session: Session, resource_id: int, start: date, end: date
 ) -> Optional[list[Conflict]]:
-    """DB entrypoint for conflict detection.
-
-    Returns None if the resource does not exist (so the API layer can 404),
-    otherwise the list of over-allocated days.
-    """
     resource = session.get(Resource, resource_id)
     if resource is None:
         return None
-    tasks = session.exec(select(Task).where(Task.resource_id == resource_id)).all()
-    return detect_conflicts(resource, tasks, start, end)
+    return detect_conflicts(resource, _tasks_for_resource(session, resource_id), start, end)

@@ -39,7 +39,7 @@ async function showTaskBoard(el, hideCompleted = false) {
       </td>
       <td>${escHtml(t.title)}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${escHtml(byProject[t.project_id] || '—')}</td>
-      <td style="color:var(--text-muted);font-size:0.9em">${escHtml(byResource[t.resource_id] || '—')}</td>
+      <td style="color:var(--text-muted);font-size:0.9em">${escHtml((t.resource_ids || []).map(id => byResource[id]).filter(Boolean).join(', ') || '—')}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.end_date)}</td>
       <td style="font-size:0.85em">${t.duration != null ? t.duration + 'h' : '—'}</td>

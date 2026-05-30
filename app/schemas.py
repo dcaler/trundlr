@@ -117,7 +117,7 @@ class TaskCreate(BaseModel):
     title: NonEmptyStr
     description: Optional[str] = None
     project_id: BodyId
-    resource_id: OptionalBodyId = None
+    resource_ids: list[BodyId] = []
     depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -134,7 +134,7 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: Optional[NonEmptyStr] = None
     description: Optional[str] = None
-    resource_id: OptionalBodyId = None
+    resource_ids: Optional[list[BodyId]] = None
     depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -158,7 +158,7 @@ class TaskRead(BaseModel):
     load: float
     duration: Optional[float] = None
     project_id: int
-    resource_id: Optional[int] = None
+    resource_ids: list[int] = []
     depends_on_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
