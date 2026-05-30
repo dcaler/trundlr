@@ -40,7 +40,8 @@ def _task_read(task: Task, session: Session) -> TaskRead:
 def list_tasks(
     project_id: int | None = OptionalDBIdQuery(), session: Session = Depends(get_db)
 ):
-    stmt = select(Task)
+    from sqlalchemy import nullslast
+    stmt = select(Task).order_by(nullslast(Task.start_date))
     if project_id is not None:
         stmt = stmt.where(Task.project_id == project_id)
     tasks = session.exec(stmt).all()
