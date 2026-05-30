@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import Resource, Task
+from app.models import Resource, Task, TaskResource
 from app.scheduling import compute_utilization, resource_conflicts, resource_schedule
 from app.schemas import ConflictRead, DayUtilizationRead, ResourceScheduleRead
 from app.validation import MAX_RANGE_DAYS, DBId
@@ -61,12 +61,20 @@ def get_utilization(
 ):
     _require_valid_range(from_date, to_date)
     resources = session.exec(select(Resource)).all()
-    all_tasks = session.exec(select(Task)).all()
+    all_tasks = {t.id: t for t in session.exec(select(Task)).all()}
+    tr_rows = session.exec(select(TaskResource)).all()
+
+    # Build resource_id → [Task] map
+    by_resource: dict[int, list[Task]] = {}
+    for tr in tr_rows:
+        if tr.task_id in all_tasks:
+            by_resource.setdefault(tr.resource_id, []).append(all_tasks[tr.task_id])
+
     return [
         ResourceScheduleRead(
-            resource_id=resource.id,
-            resource_name=resource.name,
-            days=compute_utilization(resource, all_tasks, from_date, to_date),
+            resource_id=r.id,
+            resource_name=r.name,
+            days=compute_utilization(r, by_resource.get(r.id, []), from_date, to_date),
         )
-        for resource in resources
+        for r in resources
     ]

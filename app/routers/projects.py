@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import Project, Task
+from app.models import Project, Task, TaskResource
 from app.schemas import ProjectCreate, ProjectRead, ProjectUpdate
 from app.validation import DBId
 
@@ -56,6 +56,8 @@ def delete_project(project_id: int = DBId(), session: Session = Depends(get_db))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     for task in session.exec(select(Task).where(Task.project_id == project_id)).all():
+        for tr in session.exec(select(TaskResource).where(TaskResource.task_id == task.id)).all():
+            session.delete(tr)
         session.delete(task)
     session.delete(project)
     session.commit()
@@ -74,15 +76,18 @@ def copy_project(project_id: int = DBId(), session: Session = Depends(get_db)):
     session.add(new_project)
     session.flush()
     for task in session.exec(select(Task).where(Task.project_id == project_id)).all():
-        session.add(Task(
+        new_task = Task(
             title=task.title,
             status=task.status,
             start_date=task.start_date,
             end_date=task.end_date,
             load=task.load,
             project_id=new_project.id,
-            resource_id=task.resource_id,
-        ))
+        )
+        session.add(new_task)
+        session.flush()
+        for tr in session.exec(select(TaskResource).where(TaskResource.task_id == task.id)).all():
+            session.add(TaskResource(task_id=new_task.id, resource_id=tr.resource_id))
     session.commit()
     session.refresh(new_project)
     return new_project

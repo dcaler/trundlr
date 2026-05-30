@@ -8,7 +8,7 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Resource, Task
+from app.models import AppSettings, Project, Resource, Task, TaskResource
 from app.schemas import ResourceCreate, ResourceRead, ResourceUpdate
 from app.validation import DBId
 
@@ -59,7 +59,10 @@ def get_next_available(resource_id: int = DBId(), session: Session = Depends(get
     """Return the datetime immediately after the last task on this resource ends."""
     if not session.get(Resource, resource_id):
         raise HTTPException(status_code=404, detail="Resource not found")
-    tasks = session.exec(select(Task).where(Task.resource_id == resource_id)).all()
+    task_ids = session.exec(
+        select(TaskResource.task_id).where(TaskResource.resource_id == resource_id)
+    ).all()
+    tasks = session.exec(select(Task).where(Task.id.in_(task_ids))).all() if task_ids else []
     candidates = [
         t.end_date or t.start_date
         for t in tasks
@@ -79,9 +82,15 @@ def get_resource_calendar(resource_id: int = DBId(), session: Session = Depends(
     app_settings = session.get(AppSettings, 1)
     tz = ZoneInfo(app_settings.timezone if app_settings else "UTC")
 
-    tasks = session.exec(
-        select(Task).where(Task.resource_id == resource_id)
+    task_ids = session.exec(
+        select(TaskResource.task_id).where(TaskResource.resource_id == resource_id)
     ).all()
+    tasks = session.exec(select(Task).where(Task.id.in_(task_ids))).all() if task_ids else []
+    project_ids = {t.project_id for t in tasks}
+    project_names = {
+        p.id: p.name
+        for p in session.exec(select(Project).where(Project.id.in_(project_ids))).all()
+    }
 
     cal = Calendar()
     cal.add("prodid", f"-//Trundlr//Resource {resource_id}//EN")
@@ -101,7 +110,9 @@ def get_resource_calendar(resource_id: int = DBId(), session: Session = Depends(
             end = start + timedelta(hours=1)
 
         ev = Event()
-        ev.add("summary", task.title)
+        project_name = project_names.get(task.project_id, "")
+        summary = f"{project_name}: {task.title}" if project_name else task.title
+        ev.add("summary", summary)
         if task.description:
             ev.add("description", task.description)
         ev.add("dtstart", start)
@@ -118,9 +129,8 @@ def delete_resource(resource_id: int = DBId(), session: Session = Depends(get_db
     resource = session.get(Resource, resource_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
-    # Unassign tasks rather than cascade-delete them
-    for task in session.exec(select(Task).where(Task.resource_id == resource_id)).all():
-        task.resource_id = None
-        session.add(task)
+    # Remove all task-resource assignments for this resource before deleting
+    for tr in session.exec(select(TaskResource).where(TaskResource.resource_id == resource_id)).all():
+        session.delete(tr)
     session.delete(resource)
     session.commit()

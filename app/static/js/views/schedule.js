@@ -102,7 +102,7 @@ function buildTaskBarHourly(task, fromDate, toDate) {
 
 function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours) {
   const bars = tasks
-    .filter(t => t.resource_id === resource.id)
+    .filter(t => (t.resource_ids || []).includes(resource.id))
     .map(t => buildTaskBarHourly(t, fromDate, toDate)).join('');
   const totalW = totalHours * SCHED_HOUR_WIDTH;
   const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
@@ -115,7 +115,7 @@ function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHou
 }
 
 function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours) {
-  const unassigned = tasks.filter(t => !t.resource_id && t.start_date);
+  const unassigned = tasks.filter(t => !(t.resource_ids || []).length && t.start_date);
   if (!unassigned.length) return '';
   const bars = unassigned.map(t => buildTaskBarHourly(t, fromDate, toDate)).join('');
   const totalW = totalHours * SCHED_HOUR_WIDTH;
@@ -247,15 +247,15 @@ async function showSchedule(el) {
       <h1>Schedule</h1>
       <div class="form-row" style="margin-bottom:0.75rem;align-items:center;flex-wrap:wrap;gap:0.5rem">
         <button id="btn-prev" class="btn btn-ghost" title="Previous day">‹ Prev</button>
-        <div><label>From</label><input type="date" id="from-input" value="${from}"></div>
-        <span style="color:var(--text-muted);font-size:0.85rem;align-self:center">→ ${to}</span>
-        <button id="btn-next" class="btn btn-ghost" title="Next day">Next ›</button>
-        <div style="display:flex;align-items:center;gap:0.3rem">
-          <label style="margin:0">Show</label>
-          <input type="number" id="days-input" value="${numDays}" min="1" max="90"
-                 style="width:55px">
+        <label style="display:flex;align-items:center;gap:0.3rem;margin:0">
+          From <input type="date" id="from-input" value="${from}">
+        </label>
+        <span style="color:var(--text-muted);font-size:0.85rem">→ ${to}</span>
+        <label style="display:flex;align-items:center;gap:0.3rem;margin:0">
+          Show <input type="number" id="days-input" value="${numDays}" min="1" max="90" style="width:55px">
           <span style="font-size:0.85rem;color:var(--text-muted)">days</span>
-        </div>
+        </label>
+        <button id="btn-next" class="btn btn-ghost" title="Next day">Next ›</button>
       </div>
       <div class="tab-bar">
         <button class="tab-btn${activeTab === 'gantt' ? ' active' : ''}" id="tab-gantt">Timeline</button>

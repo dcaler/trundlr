@@ -32,13 +32,14 @@ function setupAutoCalcEnd(form) {
   calc(); // run once on load in case values are already set
 }
 
-// When a resource is selected in a task form, fill start_date with its next available slot.
+// When resources are selected in a task form, fill start_date from the first resource's next slot.
 function setupResourceAutoStart(form) {
-  const ridEl   = form.querySelector('[name="resource_id"]');
+  const ridEl   = form.querySelector('[name="resource_ids"]');
   const startEl = form.querySelector('[name="start_date"]');
   if (!ridEl || !startEl) return;
   ridEl.addEventListener('change', async () => {
-    const rid = ridEl.value;
+    const selected = [...ridEl.selectedOptions];
+    const rid = selected.length > 0 ? selected[0].value : null;
     if (!rid) return;
     try {
       const data = await api.get(`/resources/${rid}/next-available`);
@@ -213,26 +214,29 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       ),
   ].join('');
 
-  const resourceOptions = (selectedId) => [
-    `<option value=""${!selectedId ? ' selected' : ''}>— unassigned —</option>`,
-    ...resources.map(r =>
-      `<option value="${r.id}"${r.id === selectedId ? ' selected' : ''}>${escHtml(r.name)} (${escHtml(r.kind)})</option>`
-    ),
-  ].join('');
+  const resourceOptions = (selectedIds = []) =>
+    resources.map(r =>
+      `<option value="${r.id}"${selectedIds.includes(r.id) ? ' selected' : ''}>${escHtml(r.name)} (${escHtml(r.kind)})</option>`
+    ).join('');
+
+  const resourceMultiSelect = (selectedIds = []) =>
+    `<select name="resource_ids" multiple size="${Math.min(resources.length || 1, 4)}" style="min-width:160px">
+      ${resourceOptions(selectedIds)}
+    </select>`;
 
   const statusOptions = (selected) => ['todo', 'in_progress', 'blocked', 'done']
     .map(s => `<option value="${s}"${s === selected ? ' selected' : ''}>${s.replace('_', ' ')}</option>`)
     .join('');
 
   const taskRows = tasks.map(t => {
-    const res = resourceById[t.resource_id];
+    const resNames = (t.resource_ids || []).map(id => resourceById[id]?.name).filter(Boolean).join(', ');
     if (t.id === editingTaskId) {
       return `<tr class="edit-row" data-id="${t.id}">
         <td colspan="9">
           <form class="form-row edit-task-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
             <div><label>Title</label><input name="title" value="${escHtml(t.title)}" required style="width:160px"></div>
             <div><label>Description / Command</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description or shell command"></div>
-            <div><label>Resource</label><select name="resource_id">${resourceOptions(t.resource_id)}</select></div>
+            <div><label>Resources</label>${resourceMultiSelect(t.resource_ids || [])}</div>
             <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(t.depends_on_id, t.id)}</select></div>
             <div><label>Start</label><input type="datetime-local" name="start_date" value="${dtLocal(t.start_date)}"></div>
             <div><label>End (auto)</label><input type="datetime-local" name="end_date" value="${dtLocal(t.end_date)}" readonly></div>
@@ -257,7 +261,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
           ${statusOptions(t.status)}
         </select>
       </td>
-      <td>${res ? escHtml(res.name) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td>${resNames || '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="color:var(--text-muted);font-size:0.8rem">${t.depends_on_id && taskById[t.depends_on_id] ? '↳ ' + escHtml(taskById[t.depends_on_id].title) : '—'}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
@@ -283,7 +287,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
       <div><label>Title *</label><input name="title" required placeholder="Task title" style="width:180px"></div>
       <div><label>Description / Command</label><input name="description" placeholder="Optional description or shell command" style="width:240px"></div>
-      <div><label>Resource</label><select name="resource_id">${resourceOptions(null)}</select></div>
+      <div><label>Resources</label>${resourceMultiSelect([])}</div>
       <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(null, null)}</select></div>
       <div><label>Start</label><input type="datetime-local" name="start_date"></div>
       <div><label>End (auto)</label><input type="datetime-local" name="end_date" readonly></div>
@@ -315,7 +319,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
   el.querySelector('#add-task-form').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const ridRaw = fd.get('resource_id');
     const durRaw = fd.get('duration');
     try {
       const depRaw = fd.get('depends_on_id');
@@ -323,7 +326,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         title: fd.get('title'),
         description: fd.get('description') || null,
         project_id: projectId,
-        resource_id: ridRaw ? parseInt(ridRaw) : null,
+        resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
         depends_on_id: depRaw ? parseInt(depRaw) : null,
         start_date: fd.get('start_date') || null,
         end_date: fd.get('end_date') || null,
@@ -347,14 +350,13 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     editTaskForm.addEventListener('submit', async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const ridRaw = fd.get('resource_id');
       const durRaw = fd.get('duration');
       try {
         const depRaw2 = fd.get('depends_on_id');
         await api.patch(`/tasks/${editRow.dataset.id}`, {
           title: fd.get('title'),
           description: fd.get('description') || null,
-          resource_id: ridRaw ? parseInt(ridRaw) : null,
+          resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
           depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
           start_date: fd.get('start_date') || null,
           end_date: fd.get('end_date') || null,
