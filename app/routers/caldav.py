@@ -1,8 +1,13 @@
 import hashlib
+import os
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
+
+# Changes on every server restart, making stored ctags stale and forcing
+# CalDAV clients to re-fetch events after each deployment.
+_SERVER_NONCE = os.urandom(8).hex()
 
 from fastapi import APIRouter, Depends, Request, Response
 from icalendar import Calendar, Event
@@ -151,7 +156,7 @@ def _collection_ctag(tasks: list) -> str:
         f"{t.id},{t.status.value if hasattr(t.status, 'value') else t.status},{t.start_date}"
         for t in tasks
     )
-    return hashlib.md5("\n".join(parts).encode()).hexdigest()
+    return hashlib.md5(f"{_SERVER_NONCE}:{'\n'.join(parts)}".encode()).hexdigest()
 
 
 # ── iCal helpers ───────────────────────────────────────────────────────────
