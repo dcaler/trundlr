@@ -379,6 +379,27 @@ async def caldav_calendars_home(request: Request, session: Session = Depends(get
     return _multistatus(responses)
 
 
+# ── PROPPATCH /caldav/calendars/{rid}/ ─────────────────────────────────────
+# Apple Calendar uses PROPPATCH to set calendar colour, display name, etc.
+# We don't persist these, but must return 207 or clients error out.
+
+@router.api_route("/calendars/{rid}/", methods=["PROPPATCH"])
+async def caldav_calendar_proppatch(rid: int, request: Request, session: Session = Depends(get_db)):
+    if not session.get(Resource, rid):
+        return Response(status_code=404)
+    body = await request.body()
+    props = []
+    try:
+        root = ET.fromstring(body.decode("utf-8", errors="replace"))
+        for action in root:           # d:set / d:remove
+            prop_el = action.find(_d("prop"))
+            if prop_el is not None:
+                props.extend(child.tag for child in prop_el)
+    except ET.ParseError:
+        pass
+    return _multistatus([(f"/caldav/calendars/{rid}/", {tag: None for tag in props}, [])])
+
+
 # ── PROPFIND /caldav/calendars/{rid}/ ──────────────────────────────────────
 
 @router.api_route("/calendars/{rid}/", methods=["PROPFIND"])
