@@ -47,7 +47,7 @@ _DAV_HEADERS = {
 
 # ── XML helpers ────────────────────────────────────────────────────────────
 
-def _multistatus(responses: list) -> Response:
+def _multistatus(responses: list, sync_token: Optional[str] = None) -> Response:
     """Build a 207 Multi-Status response.
 
     responses: list of (href, found, missing)
@@ -56,6 +56,8 @@ def _multistatus(responses: list) -> Response:
         - ET.Element with tag "_val": set .text on the prop element
         - ET.Element otherwise: append as child of the prop element
       missing: list[tag_str]
+    sync_token: if set, appended as <d:sync-token> child of multistatus
+                (required for sync-collection REPORT responses).
     """
     root = ET.Element(_d("multistatus"))
 
@@ -83,6 +85,9 @@ def _multistatus(responses: list) -> Response:
             for tag in missing:
                 ET.SubElement(props_404, tag)
             ET.SubElement(ps_404, _d("status")).text = "HTTP/1.1 404 Not Found"
+
+    if sync_token is not None:
+        ET.SubElement(root, _d("sync-token")).text = f"urn:trundlr:sync:{sync_token}"
 
     xml_str = '<?xml version="1.0" encoding="UTF-8"?>' + ET.tostring(root, encoding="unicode")
     return Response(
@@ -304,6 +309,7 @@ def _calendar_collection_props(resource: Resource, ctag: str, requested: Optiona
         _d("resourcetype"): _resourcetype_collection_calendar(),
         _d("displayname"): _val(resource.name),
         _cs("getctag"): _val(ctag),
+        _d("sync-token"): _val(f"urn:trundlr:sync:{ctag}"),
         _cal("supported-calendar-component-set"): _supported_calendar_component_set(),
     }
     return _filter_props(all_props, requested)
@@ -432,6 +438,8 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
         return Response(status_code=400, content="Bad XML")
 
     tasks = _tasks_for_resource(session, rid)
+    ctag = _collection_ctag(tasks)
+    is_sync_collection = root.tag == _d("sync-collection")
 
     if root.tag == _cal("calendar-multiget"):
         hrefs = [el.text for el in root.findall(_d("href")) if el.text]
@@ -461,7 +469,9 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
             _cal("calendar-data"): caldata_el,
         }, []))
 
-    return _multistatus(responses)
+    # sync-collection responses must include <d:sync-token>; include it for
+    # all REPORT types so Apple Calendar establishes a sync baseline.
+    return _multistatus(responses, sync_token=ctag)
 
 
 # ── GET /caldav/calendars/{rid}/{uid_file} ─────────────────────────────────
