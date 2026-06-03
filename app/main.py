@@ -81,5 +81,17 @@ def well_known_caldav_get():
 
 
 @app.api_route("/.well-known/caldav", methods=["PROPFIND"], include_in_schema=False)
-def well_known_caldav_propfind():
-    return RedirectResponse("/caldav/principal/", status_code=301)
+async def well_known_caldav_propfind(request: Request):
+    from app.routers.caldav import (
+        _d, _cal, _href_child, _resourcetype_collection, _filter_props,
+        _multistatus, _requested_props,
+    )
+    body = await request.body()
+    requested = _requested_props(body)
+    all_props = {
+        _d("resourcetype"):           _resourcetype_collection(),
+        _d("current-user-principal"): _href_child("/caldav/principal/"),
+        _cal("calendar-home-set"):    _href_child("/caldav/calendars/"),
+    }
+    found, missing = _filter_props(all_props, requested)
+    return _multistatus([("/.well-known/caldav", found, missing)])
