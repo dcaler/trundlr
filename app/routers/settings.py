@@ -26,7 +26,8 @@ def get_settings(session: Session = Depends(get_db)):
 @router.patch("/", response_model=SettingsRead)
 def update_settings(data: SettingsUpdate, session: Session = Depends(get_db)):
     s = _get_or_create(session)
-    s.timezone = data.timezone
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(s, key, value)
     session.add(s)
     session.commit()
     session.refresh(s)

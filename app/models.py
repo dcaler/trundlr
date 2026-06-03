@@ -35,6 +35,7 @@ class Project(SQLModel, table=True):
     description: Optional[str] = Field(default=None)
     folder: Optional[str] = Field(default=None)
     archived: bool = Field(default=False)
+    priority: int = Field(default=3)  # 1=Critical 2=High 3=Medium 4=Low
     created_at: datetime = Field(default_factory=_utcnow)
 
     tasks: list["Task"] = Relationship(back_populates="project")
@@ -55,6 +56,7 @@ class Resource(SQLModel, table=True):
 class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     timezone: str = Field(default="UTC")
+    caldav_default_project_id: Optional[int] = Field(default=None, foreign_key="project.id")
 
 
 class Task(SQLModel, table=True):

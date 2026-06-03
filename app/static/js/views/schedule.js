@@ -43,6 +43,10 @@ function schedMonthLabel(dateStr) {
 
 // ── Hourly Gantt helpers ──────────────────────────────────────────────────
 
+const GANTT_BAR_H    = 28;  // bar height in px — must match CSS .gantt-bar height
+const GANTT_LANE_PAD = 4;   // px above lane 0 and between lanes
+const GANTT_LANE_H   = GANTT_BAR_H + GANTT_LANE_PAD; // 32px per lane slot
+
 // Build date+hour header for the hourly Gantt.
 // Row 1: one cell per day spanning 24 hour columns.
 // Row 2: hour numbers 00–23 for every day.
@@ -69,61 +73,94 @@ function buildHourlyHeader(dates, today) {
           <tr><th class="gantt-label-th"></th>${row2}</tr>`;
 }
 
-// Position a task bar within the hourly grid.
-// task.start_date / task.end_date are ISO datetime strings (or null).
-function buildTaskBarHourly(task, fromDate, toDate) {
-  if (!task.start_date) return '';
-
+// Compute pixel position of a task bar within the hourly grid.
+// Returns {left, width} in px, or null if the task is outside the range.
+function ganttBarPosition(task, fromDate, toDate) {
+  if (!task.start_date) return null;
   const rangeStartMs = Date.UTC(...fromDate.split('-').map(Number).map((v, i) => i === 1 ? v - 1 : v));
   const rangeEndMs   = rangeStartMs + (schedDaysBetween(fromDate, toDate) + 1) * 86400000;
   const taskStartMs  = new Date(task.start_date).getTime();
   const taskEndMs    = task.end_date ? new Date(task.end_date).getTime() : rangeEndMs;
-
-  if (taskStartMs >= rangeEndMs || taskEndMs <= rangeStartMs) return '';
-
+  if (taskStartMs >= rangeEndMs || taskEndMs <= rangeStartMs) return null;
   const effStartMs = Math.max(taskStartMs, rangeStartMs);
   const effEndMs   = Math.min(taskEndMs, rangeEndMs);
-
   const leftHours  = (effStartMs - rangeStartMs) / 3600000;
   const widthHours = Math.max(1, (effEndMs - effStartMs) / 3600000);
-
-  const left  = Math.round(leftHours * SCHED_HOUR_WIDTH);
-  const width = Math.max(SCHED_HOUR_WIDTH, Math.round(widthHours * SCHED_HOUR_WIDTH));
-
-  const startLabel = task.start_date.replace('T', ' ').slice(0, 16);
-  const endLabel   = task.end_date ? task.end_date.replace('T', ' ').slice(0, 16) : '∞';
-
-  const descLine = task.description ? `\n${escHtml(task.description)}` : '';
-  return `<div class="gantt-bar bar-${escHtml(task.status)}"
-               style="left:${left}px;width:${width}px"
-               title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}${descLine}"
-          >${escHtml(task.title)}</div>`;
+  return {
+    left:  Math.round(leftHours * SCHED_HOUR_WIDTH),
+    width: Math.max(SCHED_HOUR_WIDTH, Math.round(widthHours * SCHED_HOUR_WIDTH)),
+  };
 }
 
-function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours) {
-  const bars = tasks
-    .filter(t => (t.resource_ids || []).includes(resource.id))
-    .map(t => buildTaskBarHourly(t, fromDate, toDate)).join('');
+// Greedy lane assignment: sort bars by (left, priority) so higher-priority
+// tasks (lower number) win the top lane when tasks start at the same time.
+// Mutates bar.lane in-place.
+function assignLanes(bars) {
+  bars.sort((a, b) => a.left - b.left || a.priority - b.priority);
+  const laneEnds = [];
+  for (const bar of bars) {
+    let lane = laneEnds.findIndex(end => end <= bar.left);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = bar.left + bar.width;
+    bar.lane = lane;
+  }
+}
+
+// Build all bar HTML for a set of tasks, with lane stacking for overlaps.
+// Returns {html, trackHeight} where trackHeight accommodates all lanes.
+function buildGanttBarsHtml(tasks, fromDate, toDate, priorityByProject = {}) {
+  const bars = [];
+  for (const task of tasks) {
+    const pos = ganttBarPosition(task, fromDate, toDate);
+    const priority = priorityByProject[task.project_id] || 3;
+    if (pos) bars.push({ ...pos, task, priority, lane: 0 });
+  }
+  const defaultHeight = GANTT_LANE_PAD + GANTT_LANE_H;
+  if (!bars.length) return { html: '', trackHeight: defaultHeight };
+
+  assignLanes(bars);
+
+  const numLanes   = Math.max(...bars.map(b => b.lane)) + 1;
+  const trackHeight = GANTT_LANE_PAD + numLanes * GANTT_LANE_H;
+
+  const html = bars.map(({ left, width, task, priority, lane }) => {
+    const top        = GANTT_LANE_PAD + lane * GANTT_LANE_H;
+    const startLabel = task.start_date.replace('T', ' ').slice(0, 16);
+    const endLabel   = task.end_date ? task.end_date.replace('T', ' ').slice(0, 16) : '∞';
+    const descLine   = task.description ? `\n${escHtml(task.description)}` : '';
+    const priorityCls = priority <= 2 ? ` bar-p${priority}` : '';
+    return `<div class="gantt-bar bar-${escHtml(task.status)}${priorityCls}"
+                 style="left:${left}px;width:${width}px;top:${top}px"
+                 title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}${descLine}"
+            >${escHtml(task.title)}</div>`;
+  }).join('');
+
+  return { html, trackHeight };
+}
+
+function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours, priorityByProject = {}) {
+  const resTasks = tasks.filter(t => (t.resource_ids || []).includes(resource.id));
+  const { html: bars, trackHeight } = buildGanttBarsHtml(resTasks, fromDate, toDate, priorityByProject);
   const totalW = totalHours * SCHED_HOUR_WIDTH;
   const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
   return `<tr>
     <td class="gantt-label-td">${escHtml(resource.name)}</td>
     <td class="gantt-track-td" colspan="${totalHours}">
-      <div class="gantt-track" style="width:${totalW}px;background:${grid}">${bars}</div>
+      <div class="gantt-track" style="width:${totalW}px;height:${trackHeight}px;background:${grid}">${bars}</div>
     </td>
   </tr>`;
 }
 
-function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours) {
+function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours, priorityByProject = {}) {
   const unassigned = tasks.filter(t => !(t.resource_ids || []).length && t.start_date);
   if (!unassigned.length) return '';
-  const bars = unassigned.map(t => buildTaskBarHourly(t, fromDate, toDate)).join('');
+  const { html: bars, trackHeight } = buildGanttBarsHtml(unassigned, fromDate, toDate, priorityByProject);
   const totalW = totalHours * SCHED_HOUR_WIDTH;
   const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
   return `<tr>
     <td class="gantt-label-td gantt-unassigned">Unassigned</td>
     <td class="gantt-track-td" colspan="${totalHours}">
-      <div class="gantt-track" style="width:${totalW}px;background:${grid}">${bars}</div>
+      <div class="gantt-track" style="width:${totalW}px;height:${trackHeight}px;background:${grid}">${bars}</div>
     </td>
   </tr>`;
 }
@@ -293,9 +330,11 @@ async function showSchedule(el) {
   }
 
   async function renderGantt(gen, to) {
-    let resources, tasks;
+    let resources, tasks, projects;
     try {
-      [resources, tasks] = await Promise.all([api.get('/resources/'), api.get('/tasks/')]);
+      [resources, tasks, projects] = await Promise.all([
+        api.get('/resources/'), api.get('/tasks/'), api.get('/projects/'),
+      ]);
     } catch (err) {
       if (renderGen !== gen) return;
       const body = document.getElementById('view-body');
@@ -311,12 +350,14 @@ async function showSchedule(el) {
       return;
     }
 
+    const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
+
     const dates      = schedGenerateDates(from, to);
     const totalHours = dates.length * 24;
     const thead      = buildHourlyHeader(dates, today);
     const tbody = [
-      ...resources.map(r => buildGanttResourceRowHourly(r, tasks, from, to, totalHours)),
-      buildUnassignedRowHourly(tasks, from, to, totalHours),
+      ...resources.map(r => buildGanttResourceRowHourly(r, tasks, from, to, totalHours, priorityByProject)),
+      buildUnassignedRowHourly(tasks, from, to, totalHours, priorityByProject),
     ].join('');
 
     body.innerHTML = `

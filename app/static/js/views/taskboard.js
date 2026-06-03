@@ -16,11 +16,16 @@ async function showTaskBoard(el, hideCompleted = false) {
     api.get('/resources/'),
   ]);
 
-  const byProject  = Object.fromEntries(projects.map(p => [p.id, p.name]));
-  const byResource = Object.fromEntries(resources.map(r => [r.id, r.name]));
+  const byProject        = Object.fromEntries(projects.map(p => [p.id, p.name]));
+  const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
+  const byResource       = Object.fromEntries(resources.map(r => [r.id, r.name]));
 
   const visible = hideCompleted ? tasks.filter(t => t.status !== 'done') : tasks;
-  visible.sort((a, b) => taskSortKey(a) - taskSortKey(b));
+  // Primary sort: start_date (nulls last). Secondary: project priority (1=highest).
+  visible.sort((a, b) =>
+    taskSortKey(a) - taskSortKey(b) ||
+    (priorityByProject[a.project_id] || 3) - (priorityByProject[b.project_id] || 3)
+  );
 
   const rows = visible.map(t => {
     const done = t.status === 'done';
@@ -38,7 +43,7 @@ async function showTaskBoard(el, hideCompleted = false) {
         </select>
       </td>
       <td>${escHtml(t.title)}</td>
-      <td style="color:var(--text-muted);font-size:0.9em">${escHtml(byProject[t.project_id] || '—')}</td>
+      <td style="color:var(--text-muted);font-size:0.9em">${priorityBadge(priorityByProject[t.project_id])}${escHtml(byProject[t.project_id] || '—')}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${escHtml((t.resource_ids || []).map(id => byResource[id]).filter(Boolean).join(', ') || '—')}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.end_date)}</td>

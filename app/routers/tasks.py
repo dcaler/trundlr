@@ -1,13 +1,21 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import Project, Resource, Task, TaskResource
+from app.models import AppSettings, Project, Resource, Task, TaskResource
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 from app.validation import DBId, OptionalDBIdQuery
+
+
+def _now_naive(session: Session) -> datetime:
+    """Current time in the configured app timezone, as a naive datetime (matching stored task times)."""
+    settings = session.get(AppSettings, 1)
+    tz = ZoneInfo(settings.timezone if settings else "UTC")
+    return datetime.now(tz).replace(tzinfo=None, second=0, microsecond=0)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -128,25 +136,24 @@ def copy_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     task = _get_task_or_404(task_id, session)
     orig_resource_ids = _resource_ids(task_id, session)
 
-    new_start = task.start_date
-    new_end = task.end_date
-
-    # Auto-place the copy right after the last task on the first assigned resource
-    if orig_resource_ids:
-        primary_rid = orig_resource_ids[0]
+    # Start no earlier than now; also no earlier than the last task on each assigned resource.
+    candidates: list[datetime] = [_now_naive(session)]
+    for rid in orig_resource_ids:
         sibling_ids = session.exec(
-            select(TaskResource.task_id).where(TaskResource.resource_id == primary_rid)
+            select(TaskResource.task_id).where(TaskResource.resource_id == rid)
         ).all()
-        sibling_tasks = session.exec(select(Task).where(Task.id.in_(sibling_ids))).all()
-        candidates = [
-            t.end_date or t.start_date
-            for t in sibling_tasks
-            if (t.end_date or t.start_date) is not None
-        ]
-        if candidates:
-            latest = max(candidates)
-            new_start = latest
-            new_end = (latest + timedelta(hours=task.duration)) if task.duration else None
+        if sibling_ids:
+            sibling_tasks = session.exec(select(Task).where(Task.id.in_(sibling_ids))).all()
+            times = [
+                t.end_date or t.start_date
+                for t in sibling_tasks
+                if (t.end_date or t.start_date) is not None
+            ]
+            if times:
+                candidates.append(max(times))
+
+    new_start = max(candidates)
+    new_end = (new_start + timedelta(hours=task.duration)) if task.duration else None
 
     new_task = Task(
         title=f"{task.title} (copy)",
