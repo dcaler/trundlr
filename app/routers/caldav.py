@@ -316,14 +316,21 @@ def caldav_options(path: str):
     return Response(status_code=200, headers=_DAV_HEADERS)
 
 
-# ── PROPFIND /caldav/ → redirect ───────────────────────────────────────────
+# ── PROPFIND /caldav/ ─────────────────────────────────────────────────────
+# Must return 207, not a redirect — CalDAV clients don't reliably follow
+# PROPFIND redirects, causing "unsupported location" errors in Apple Calendar.
 
 @router.api_route("/", methods=["PROPFIND"])
-def caldav_root_propfind():
-    return Response(
-        status_code=301,
-        headers={"Location": "/caldav/principal/", **_DAV_HEADERS},
-    )
+async def caldav_root_propfind(request: Request):
+    body = await request.body()
+    requested = _requested_props(body)
+    all_props = {
+        _d("resourcetype"):           _resourcetype_collection(),
+        _d("current-user-principal"): _href_child("/caldav/principal/"),
+        _cal("calendar-home-set"):    _href_child("/caldav/calendars/"),
+    }
+    found, missing = _filter_props(all_props, requested)
+    return _multistatus([("/caldav/", found, missing)])
 
 
 # ── PROPFIND /caldav/principal/ ────────────────────────────────────────────
