@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 @router.get("/", response_model=List[ProjectRead])
 def list_projects(archived: bool = False, session: Session = Depends(get_db)):
-    return session.exec(select(Project).where(Project.archived == archived)).all()
+    return session.exec(select(Project).where(Project.archived == archived).order_by(Project.priority, Project.name)).all()
 
 
 @router.post("/", response_model=ProjectRead, status_code=201)
