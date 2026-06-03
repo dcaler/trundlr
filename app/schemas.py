@@ -25,6 +25,7 @@ class ProjectCreate(BaseModel):
     name: NonEmptyStr
     description: Optional[str] = None
     folder: Optional[str] = None
+    priority: int = Field(default=3, ge=1, le=4)
 
 
 class ProjectUpdate(BaseModel):
@@ -32,6 +33,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     folder: Optional[str] = None
     archived: Optional[bool] = None
+    priority: Optional[int] = Field(default=None, ge=1, le=4)
 
 
 class ProjectRead(BaseModel):
@@ -40,6 +42,7 @@ class ProjectRead(BaseModel):
     description: Optional[str] = None
     folder: Optional[str] = None
     archived: bool = False
+    priority: int = 3
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -198,12 +201,14 @@ class ResourceScheduleRead(BaseModel):
 
 class SettingsRead(BaseModel):
     timezone: str
+    caldav_default_project_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
 
 class SettingsUpdate(BaseModel):
     timezone: str
+    caldav_default_project_id: Optional[int] = None
 
     @field_validator("timezone")
     @classmethod

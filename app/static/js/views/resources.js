@@ -41,11 +41,11 @@ function availabilityFields(r = null) {
     <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
       <div>
         <label>From</label>
-        <input type="time" name="available_from" value="${escHtml(from)}" required style="width:110px">
+        <input type="text" name="available_from" value="${escHtml(from)}" placeholder="HH:MM" maxlength="5" required style="width:80px">
       </div>
       <div>
         <label>To</label>
-        <input type="time" name="available_to" value="${escHtml(to)}" required style="width:110px">
+        <input type="text" name="available_to" value="${escHtml(to)}" placeholder="HH:MM" maxlength="5" required style="width:80px">
       </div>
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
         ${dayCheckboxes(days)}

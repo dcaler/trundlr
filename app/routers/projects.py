@@ -72,6 +72,7 @@ def copy_project(project_id: int = DBId(), session: Session = Depends(get_db)):
         name=f"{project.name} (copy)",
         description=project.description,
         folder=project.folder,
+        priority=project.priority,
     )
     session.add(new_project)
     session.flush()

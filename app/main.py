@@ -6,11 +6,12 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import apply_migrations, create_db_and_tables, init_engine
 from app.routers import projects, resources, schedule, settings, tasks
+from app.routers import caldav
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -71,3 +72,14 @@ app.include_router(resources.router)
 app.include_router(tasks.router)
 app.include_router(schedule.router)
 app.include_router(settings.router)
+app.include_router(caldav.router)
+
+
+@app.get("/.well-known/caldav", include_in_schema=False)
+def well_known_caldav_get():
+    return RedirectResponse("/caldav/principal/", status_code=301)
+
+
+@app.api_route("/.well-known/caldav", methods=["PROPFIND"], include_in_schema=False)
+def well_known_caldav_propfind():
+    return RedirectResponse("/caldav/principal/", status_code=301)

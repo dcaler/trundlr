@@ -1,60 +1,102 @@
 // ── Projects view ─────────────────────────────────────────────────────────
 
+const PRIORITY_LABELS = { 1: 'P1 – Critical', 2: 'P2 – High', 3: 'P3 – Medium', 4: 'P4 – Low' };
+const PRIORITY_KEYS   = [1, 2, 3, 4];
+
+function priorityBadge(p) {
+  if (!p || p >= 3) return '';
+  return `<span class="badge priority-p${p}" style="font-size:0.7em;margin-right:0.3em">P${p}</span>`;
+}
+
+function prioritySelect(selected = 3) {
+  return `<select name="priority">
+    ${PRIORITY_KEYS.map(k =>
+      `<option value="${k}"${k === selected ? ' selected' : ''}>${escHtml(PRIORITY_LABELS[k])}</option>`
+    ).join('')}
+  </select>`;
+}
+
 // Format ISO datetime string for display: "2025-06-01T09:00:00" → "2025-06-01 09:00"
 function fmtDt(iso) {
   if (!iso) return '—';
   return iso.replace('T', ' ').slice(0, 16);
 }
 
-// Truncate ISO datetime to "YYYY-MM-DDTHH:MM" for datetime-local input value
-function dtLocal(iso) {
-  if (!iso) return '';
-  return iso.slice(0, 16).replace(' ', 'T');
-}
+// Split ISO datetime for separate date + time text inputs (always 24h)
+function dtDate(iso) { return iso ? iso.slice(0, 10) : ''; }
+function dtTime(iso) { return iso ? iso.replace('T', ' ').slice(11, 16) : ''; }
 
 // Wire up start_date + duration → auto-fill end_date (readonly) on a task form.
 function setupAutoCalcEnd(form) {
-  const startEl = form.querySelector('[name="start_date"]');
-  const durEl   = form.querySelector('[name="duration"]');
-  const endEl   = form.querySelector('[name="end_date"]');
-  if (!startEl || !durEl || !endEl) return;
+  const startDateEl = form.querySelector('[name="start_date"]');
+  const startTimeEl = form.querySelector('[name="start_time"]');
+  const durEl       = form.querySelector('[name="duration"]');
+  const endDateEl   = form.querySelector('[name="end_date"]');
+  const endTimeEl   = form.querySelector('[name="end_time"]');
+  if (!startDateEl || !durEl || !endDateEl) return;
   function calc() {
-    if (!startEl.value || !durEl.value) { endEl.value = ''; return; }
-    const ms = new Date(startEl.value).getTime() + parseFloat(durEl.value) * 3_600_000;
+    const dateVal = startDateEl.value;
+    const timeVal = startTimeEl?.value || '00:00';
+    if (!dateVal || !durEl.value) {
+      endDateEl.value = '';
+      if (endTimeEl) endTimeEl.value = '';
+      return;
+    }
+    const ms = new Date(`${dateVal}T${timeVal}`).getTime() + parseFloat(durEl.value) * 3_600_000;
     if (!isNaN(ms)) {
       const d = new Date(ms);
       const p = n => String(n).padStart(2, '0');
-      endEl.value = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+      endDateEl.value = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+      if (endTimeEl) endTimeEl.value = `${p(d.getHours())}:${p(d.getMinutes())}`;
     }
   }
-  startEl.addEventListener('change', calc);
+  startDateEl.addEventListener('change', calc);
+  if (startTimeEl) startTimeEl.addEventListener('change', calc);
   durEl.addEventListener('change', calc);
-  calc(); // run once on load in case values are already set
+  calc();
 }
 
 // When resources are selected in a task form, fill start_date from the first resource's next slot.
 function setupResourceAutoStart(form) {
-  const startEl = form.querySelector('[name="start_date"]');
-  if (!startEl) return;
-  form.querySelectorAll('[name="resource_ids"]').forEach(cb => {
-    cb.addEventListener('change', async () => {
-      if (!cb.checked) return;
-      try {
-        const data = await api.get(`/resources/${cb.value}/next-available`);
+  const startDateEl = form.querySelector('[name="start_date"]');
+  const startTimeEl = form.querySelector('[name="start_time"]');
+  if (!startDateEl) return;
+
+  async function refreshStart() {
+    const checked = [...form.querySelectorAll('[name="resource_ids"]:checked')];
+    if (!checked.length) return;
+
+    // Start no earlier than now; also no earlier than the last task on each checked resource.
+    let bestMs = Date.now();
+    try {
+      const results = await Promise.all(
+        checked.map(cb => api.get(`/resources/${cb.value}/next-available`))
+      );
+      for (const data of results) {
         if (data.next_available) {
-          startEl.value = data.next_available.slice(0, 16).replace(' ', 'T');
-          startEl.dispatchEvent(new Event('change'));
+          bestMs = Math.max(bestMs, new Date(data.next_available.replace(' ', 'T')).getTime());
         }
-      } catch (_) { /* leave blank if fetch fails */ }
-    });
+      }
+    } catch (_) { /* keep bestMs = now on failure */ }
+
+    const best = new Date(bestMs);
+    const p = n => String(n).padStart(2, '0');
+    startDateEl.value = `${best.getFullYear()}-${p(best.getMonth() + 1)}-${p(best.getDate())}`;
+    if (startTimeEl) startTimeEl.value = `${p(best.getHours())}:${p(best.getMinutes())}`;
+    startDateEl.dispatchEvent(new Event('change'));
+  }
+
+  form.querySelectorAll('[name="resource_ids"]').forEach(cb => {
+    cb.addEventListener('change', refreshStart);
   });
 }
 
 // When a dependency task is selected, fill start_date from that task's end (or start).
 function setupDependencyAutoStart(form, taskById) {
-  const depEl   = form.querySelector('[name="depends_on_id"]');
-  const startEl = form.querySelector('[name="start_date"]');
-  if (!depEl || !startEl) return;
+  const depEl       = form.querySelector('[name="depends_on_id"]');
+  const startDateEl = form.querySelector('[name="start_date"]');
+  const startTimeEl = form.querySelector('[name="start_time"]');
+  if (!depEl || !startDateEl) return;
   depEl.addEventListener('change', () => {
     const depId = parseInt(depEl.value);
     if (!depId) return;
@@ -62,8 +104,10 @@ function setupDependencyAutoStart(form, taskById) {
     if (!dep) return;
     const anchor = dep.end_date || dep.start_date;
     if (anchor) {
-      startEl.value = anchor.slice(0, 16).replace(' ', 'T');
-      startEl.dispatchEvent(new Event('change'));
+      const iso = anchor.replace(' ', 'T');
+      startDateEl.value = iso.slice(0, 10);
+      if (startTimeEl) startTimeEl.value = iso.slice(11, 16);
+      startDateEl.dispatchEvent(new Event('change'));
     }
   });
 }
@@ -80,6 +124,7 @@ async function showProjectsList(el, editingId = null) {
             <div><label>Name</label><input name="name" value="${escHtml(p.name)}" required style="width:180px"></div>
             <div><label>Folder</label><input name="folder" value="${escHtml(p.folder || '')}" style="width:140px"></div>
             <div><label>Description</label><input name="description" value="${escHtml(p.description || '')}" style="width:220px"></div>
+            <div><label>Priority</label>${prioritySelect(p.priority || 3)}</div>
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
               <button type="button" class="btn btn-ghost cancel-project-edit">Cancel</button>
@@ -89,7 +134,7 @@ async function showProjectsList(el, editingId = null) {
       </tr>`;
     }
     return `<tr>
-      <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(p.name)}</button></td>
+      <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${priorityBadge(p.priority)}${escHtml(p.name)}</button></td>
       <td style="color:var(--text-muted)">${escHtml(p.folder || '—')}</td>
       <td style="color:var(--text-muted)">${escHtml(p.description || '—')}</td>
       <td style="white-space:nowrap;text-align:right">
@@ -108,6 +153,7 @@ async function showProjectsList(el, editingId = null) {
       <div><label>Name</label><input name="name" required placeholder="Project name" style="width:200px"></div>
       <div><label>Folder</label><input name="folder" placeholder="Optional folder" style="width:160px"></div>
       <div><label>Description</label><input name="description" placeholder="Optional" style="width:260px"></div>
+      <div><label>Priority</label>${prioritySelect(3)}</div>
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ New Project</button>
       </div>
@@ -131,6 +177,7 @@ async function showProjectsList(el, editingId = null) {
         name: fd.get('name'),
         folder: fd.get('folder') || null,
         description: fd.get('description') || null,
+        priority: parseInt(fd.get('priority')) || 3,
       });
       await showProjectsList(el);
     } catch (err) { alert(`Error: ${err.message}`); }
@@ -155,6 +202,7 @@ async function showProjectsList(el, editingId = null) {
           name: fd.get('name'),
           folder: fd.get('folder') || null,
           description: fd.get('description') || null,
+          priority: parseInt(fd.get('priority')) || 3,
         });
         await showProjectsList(el);
       } catch (err) { alert(`Error: ${err.message}`); }
@@ -237,8 +285,18 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
             <div><label>Description / Command</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description or shell command"></div>
             <div><label>Resources</label>${resourceCheckboxes(t.resource_ids || [])}</div>
             <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(t.depends_on_id, t.id)}</select></div>
-            <div><label>Start</label><input type="datetime-local" name="start_date" value="${dtLocal(t.start_date)}"></div>
-            <div><label>End (auto)</label><input type="datetime-local" name="end_date" value="${dtLocal(t.end_date)}" readonly></div>
+            <div><label>Start</label>
+              <span style="display:flex;gap:0.25rem">
+                <input type="date" name="start_date" value="${dtDate(t.start_date)}" style="width:130px">
+                <input type="text" name="start_time" value="${dtTime(t.start_date)}" placeholder="HH:MM" maxlength="5" style="width:65px">
+              </span>
+            </div>
+            <div><label>End (auto)</label>
+              <span style="display:flex;gap:0.25rem">
+                <input type="date" name="end_date" value="${dtDate(t.end_date)}" readonly style="width:130px">
+                <input type="text" name="end_time" value="${dtTime(t.end_date)}" placeholder="HH:MM" maxlength="5" readonly style="width:65px">
+              </span>
+            </div>
             <div><label>Load</label><input type="number" name="load" value="${t.load}" min="0.01" step="any" style="width:70px"></div>
             <div><label>Duration (h)</label><input type="number" name="duration" value="${t.duration != null ? t.duration : ''}" min="0.01" step="any" style="width:70px" placeholder="—"></div>
             <div><label>Status</label><select name="status">${statusOptions(t.status)}</select></div>
@@ -278,7 +336,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     <div style="margin-bottom:1rem">
       <button class="btn btn-ghost back-btn">← Projects</button>
     </div>
-    <h1>${escHtml(project.name)}</h1>
+    <h1>${priorityBadge(project.priority)}${escHtml(project.name)}</h1>
     ${project.folder ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Folder:</strong> ${escHtml(project.folder)}</p>` : ''}
     ${project.description ? `<p style="color:var(--text-muted);margin-bottom:1rem">${escHtml(project.description)}</p>` : ''}
 
@@ -288,8 +346,18 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       <div><label>Description / Command</label><input name="description" placeholder="Optional description or shell command" style="width:240px"></div>
       <div><label>Resources</label>${resourceCheckboxes([])}</div>
       <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(null, null)}</select></div>
-      <div><label>Start</label><input type="datetime-local" name="start_date"></div>
-      <div><label>End (auto)</label><input type="datetime-local" name="end_date" readonly></div>
+      <div><label>Start</label>
+        <span style="display:flex;gap:0.25rem">
+          <input type="date" name="start_date" style="width:130px">
+          <input type="text" name="start_time" placeholder="HH:MM" maxlength="5" style="width:65px">
+        </span>
+      </div>
+      <div><label>End (auto)</label>
+        <span style="display:flex;gap:0.25rem">
+          <input type="date" name="end_date" readonly style="width:130px">
+          <input type="text" name="end_time" placeholder="HH:MM" maxlength="5" readonly style="width:65px">
+        </span>
+      </div>
       <div><label>Load</label><input type="number" name="load" value="1" min="0.01" step="any" style="width:70px"></div>
       <div><label>Duration (h)</label><input type="number" name="duration" min="0.01" step="any" style="width:70px" placeholder="—"></div>
       <div><label>Status</label><select name="status">${statusOptions('todo')}</select></div>
@@ -327,8 +395,8 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         project_id: projectId,
         resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
         depends_on_id: depRaw ? parseInt(depRaw) : null,
-        start_date: fd.get('start_date') || null,
-        end_date: fd.get('end_date') || null,
+        start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,
+        end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
         load: parseFloat(fd.get('load')),
         duration: durRaw ? parseFloat(durRaw) : null,
         status: fd.get('status'),
@@ -357,8 +425,8 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
           description: fd.get('description') || null,
           resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
           depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
-          start_date: fd.get('start_date') || null,
-          end_date: fd.get('end_date') || null,
+          start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,
+          end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
           load: parseFloat(fd.get('load')),
           duration: durRaw ? parseFloat(durRaw) : null,
           status: fd.get('status'),

@@ -228,6 +228,13 @@ input[readonly] {
 .badge-blocked    { background: #f8d7da; color: #842029; }
 .badge-done       { background: #d1e7dd; color: #0a3622; }
 
+/* ── Project priority badges ────────────────────────────────────────────── */
+
+.priority-p1 { background: #dc3545; color: white; }
+.priority-p2 { background: #fd7e14; color: white; }
+.priority-p3 { background: #6c757d; color: white; }
+.priority-p4 { background: #adb5bd; color: #495057; }
+
 /* ── Gantt timeline ─────────────────────────────────────────────────────── */
 
 .gantt-legend {
@@ -343,22 +350,13 @@ input[readonly] {
 
 .gantt-track {
   position: relative;
-  height: 44px;
-  /* Vertical day-grid lines via repeating gradient */
-  background-image: repeating-linear-gradient(
-    to right,
-    transparent,
-    transparent 27px,
-    #f0f0f0 27px,
-    #f0f0f0 28px
-  );
+  /* height set dynamically by JS based on number of lanes */
 }
 
 /* Task bars */
 .gantt-bar {
   position: absolute;
-  top: 6px;
-  height: 32px;
+  height: 28px;
   border-radius: 4px;
   padding: 0 6px;
   display: flex;
@@ -376,6 +374,10 @@ input[readonly] {
 .bar-in_progress { background: #cfe2ff; color: #084298; border-left: 3px solid #0d6efd; }
 .bar-blocked    { background: #f8d7da; color: #842029; border-left: 3px solid #dc3545; }
 .bar-done       { background: #d1e7dd; color: #0a3622; }
+
+/* Priority top-stripe on Gantt bars (P3/P4 have no extra decoration) */
+.bar-p1 { border-top: 2px solid #dc3545; }
+.bar-p2 { border-top: 2px solid #fd7e14; }
 
 /* ── Tab bar ─────────────────────────────────────────────────────────────── */
 

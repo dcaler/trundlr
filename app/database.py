@@ -127,6 +127,17 @@ def apply_migrations(engine):
             """))
             conn.commit()
 
+        result = conn.execute(text("PRAGMA table_info(appsettings)"))
+        appsettings_cols = {row[1] for row in result}
+        if "caldav_default_project_id" not in appsettings_cols:
+            conn.execute(text("ALTER TABLE appsettings ADD COLUMN caldav_default_project_id INTEGER REFERENCES project(id)"))
+            conn.commit()
+
+        result = conn.execute(text("PRAGMA table_info(project)"))
+        if "priority" not in {row[1] for row in result}:
+            conn.execute(text("ALTER TABLE project ADD COLUMN priority INTEGER NOT NULL DEFAULT 3"))
+            conn.commit()
+
 
 def get_session(engine) -> Generator[Session, None, None]:
     """FastAPI dependency that yields a database session.
