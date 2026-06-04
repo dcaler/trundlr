@@ -415,7 +415,6 @@ async def caldav_calendar_propfind(rid: int, request: Request, session: Session 
     body = await request.body()
     requested = _requested_props(body)
     depth = request.headers.get("Depth", "0")
-    print(f"[caldav] PROPFIND /calendars/{rid}/ Depth={depth} body={body.decode('utf-8', 'replace')!r}", flush=True)
 
     tasks = _tasks_for_resource(session, rid)
     ctag = _collection_ctag(tasks)
@@ -443,7 +442,6 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
 
     body = await request.body()
     tz = _get_tz(session)
-    print(f"[caldav] REPORT /calendars/{rid}/ body={body.decode('utf-8', 'replace')!r}", flush=True)
 
     try:
         root = ET.fromstring(body.decode("utf-8", errors="replace"))
