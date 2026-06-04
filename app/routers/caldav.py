@@ -170,23 +170,15 @@ def _task_to_ical(task: Task, resource: Resource, project_name: Optional[str], t
     if task.description:
         ev.add("description", task.description)
 
-    if task.start_date:
-        start_dt = task.start_date
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=tz)
-        else:
-            start_dt = start_dt.astimezone(tz)
-        ev.add("dtstart", start_dt)
+    def _to_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=tz).astimezone(timezone.utc)
+        return dt.astimezone(timezone.utc)
 
-        if task.end_date:
-            end_dt = task.end_date
-            if end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=tz)
-            else:
-                end_dt = end_dt.astimezone(tz)
-        else:
-            end_dt = start_dt + timedelta(hours=1)
-        ev.add("dtend", end_dt)
+    if task.start_date:
+        start_utc = _to_utc(task.start_date)
+        ev.add("dtstart", start_utc)
+        ev.add("dtend", _to_utc(task.end_date) if task.end_date else start_utc + timedelta(hours=1))
     else:
         today = date.today()
         ev.add("dtstart", today)

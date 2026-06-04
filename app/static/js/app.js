@@ -56,6 +56,11 @@ let appSettings = { timezone: 'UTC' };
 
 window.addEventListener('hashchange', navigate);
 window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const v = await api.get('/version');
+    const el = document.getElementById('nav-version');
+    if (el) el.textContent = v.version;
+  } catch (_) {}
   try { appSettings = await api.get('/settings/'); } catch (_) { /* use defaults */ }
   navigate();
 });
