@@ -1,7 +1,10 @@
 import math
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+
+_STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -65,6 +68,11 @@ def read_root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/version")
+def version():
+    return {"version": _STARTED_AT}
 
 
 app.include_router(projects.router)
