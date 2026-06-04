@@ -5,9 +5,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-# Changes on every server restart, making stored ctags stale and forcing
-# CalDAV clients to re-fetch events after each deployment.
-_SERVER_NONCE = os.urandom(8).hex()
 
 from fastapi import APIRouter, Depends, Request, Response
 from icalendar import Calendar, Event
@@ -152,11 +149,10 @@ def _task_etag(task: Task) -> str:
 
 
 def _collection_ctag(tasks: list) -> str:
-    parts = sorted(
-        f"{t.id},{t.status.value if hasattr(t.status, 'value') else t.status},{t.start_date}"
-        for t in tasks
-    )
-    return hashlib.md5(f"{_SERVER_NONCE}:{chr(10).join(parts)}".encode()).hexdigest()
+    # Return a unique value on every call so Apple Calendar always detects
+    # a "changed" ctag between its two PROPFIND rounds and sends REPORT.
+    # Full re-fetches are cheap at this scale.
+    return os.urandom(8).hex()
 
 
 # ── iCal helpers ───────────────────────────────────────────────────────────
