@@ -3,6 +3,7 @@ import os
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 
@@ -457,7 +458,9 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
         hrefs = [el.text for el in root.findall(_d("href")) if el.text]
         wanted_ids = set()
         for href in hrefs:
-            filename = href.rstrip("/").rsplit("/", 1)[-1]
+            # Hrefs arrive percent-encoded (e.g. task-28%40trundlr.ics) — decode
+            # before parsing or the "@trundlr" suffix check never matches.
+            filename = unquote(href).rstrip("/").rsplit("/", 1)[-1]
             uid = filename[:-4] if filename.endswith(".ics") else filename
             task_id = _parse_task_id(uid)
             if task_id is not None:
