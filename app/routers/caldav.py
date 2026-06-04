@@ -192,13 +192,9 @@ def _task_to_ical(task: Task, resource: Resource, project_name: Optional[str], t
         ev.add("dtstart", today)
         ev.add("dtend", today + timedelta(days=1))
 
-    status_val = task.status.value if hasattr(task.status, "value") else task.status
-    if status_val in ("todo", "blocked"):
-        ev.add("status", "TENTATIVE")
-    elif status_val == "in_progress":
-        ev.add("status", "CONFIRMED")
-    else:
-        ev.add("status", "CANCELLED")
+    # All tasks show as CONFIRMED so Apple Calendar displays them as normal
+    # events. TENTATIVE renders as hatched and CANCELLED is silently hidden.
+    ev.add("status", "CONFIRMED")
 
     ev.add("dtstamp", datetime.now(timezone.utc))
     cal.add_component(ev)
