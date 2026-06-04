@@ -156,7 +156,7 @@ def _collection_ctag(tasks: list) -> str:
         f"{t.id},{t.status.value if hasattr(t.status, 'value') else t.status},{t.start_date}"
         for t in tasks
     )
-    return hashlib.md5(f"{_SERVER_NONCE}:{'\n'.join(parts)}".encode()).hexdigest()
+    return hashlib.md5(f"{_SERVER_NONCE}:{chr(10).join(parts)}".encode()).hexdigest()
 
 
 # ── iCal helpers ───────────────────────────────────────────────────────────
