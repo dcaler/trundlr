@@ -397,6 +397,15 @@ async def caldav_calendar_proppatch(rid: int, request: Request, session: Session
 
 # ── PROPFIND /caldav/calendars/{rid}/ ──────────────────────────────────────
 
+def _event_member_props(task: Task, requested: Optional[list]) -> tuple:
+    all_props = {
+        _d("resourcetype"): None,  # self-closing: a plain resource, not a collection
+        _d("getetag"): _val(_task_etag(task)),
+        _d("getcontenttype"): _val("text/calendar; component=vevent"),
+    }
+    return _filter_props(all_props, requested)
+
+
 @router.api_route("/calendars/{rid}/", methods=["PROPFIND"])
 async def caldav_calendar_propfind(rid: int, request: Request, session: Session = Depends(get_db)):
     resource = session.get(Resource, rid)
@@ -404,10 +413,23 @@ async def caldav_calendar_propfind(rid: int, request: Request, session: Session 
         return Response(status_code=404)
     body = await request.body()
     requested = _requested_props(body)
+    depth = request.headers.get("Depth", "0")
+    print(f"[caldav] PROPFIND /calendars/{rid}/ Depth={depth} body={body.decode('utf-8', 'replace')!r}", flush=True)
+
     tasks = _tasks_for_resource(session, rid)
     ctag = _collection_ctag(tasks)
     found, missing = _calendar_collection_props(resource, ctag, requested)
-    return _multistatus([(f"/caldav/calendars/{rid}/", found, missing)])
+    responses = [(f"/caldav/calendars/{rid}/", found, missing)]
+
+    # Depth:1 enumerates the calendar's event members — the classic WebDAV
+    # listing path Apple Calendar uses to discover events.
+    if depth == "1":
+        for task in tasks:
+            m_found, m_missing = _event_member_props(task, requested)
+            href = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
+            responses.append((href, m_found, m_missing))
+
+    return _multistatus(responses)
 
 
 # ── REPORT /caldav/calendars/{rid}/ ────────────────────────────────────────
@@ -420,6 +442,7 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
 
     body = await request.body()
     tz = _get_tz(session)
+    print(f"[caldav] REPORT /calendars/{rid}/ body={body.decode('utf-8', 'replace')!r}", flush=True)
 
     try:
         root = ET.fromstring(body.decode("utf-8", errors="replace"))
