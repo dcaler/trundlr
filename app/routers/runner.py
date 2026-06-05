@@ -56,6 +56,8 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
         .join(Project, Task.project_id == Project.id)
         .where(TaskResource.resource_id == resource_id)
         .where(Task.status == TaskStatus.todo)
+        .where(Task.command.isnot(None))
+        .where(Task.command != "")
         .order_by(Project.priority, nullslast(Task.start_date))
         .limit(1)
     )
