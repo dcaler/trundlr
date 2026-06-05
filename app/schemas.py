@@ -25,6 +25,7 @@ class ProjectCreate(BaseModel):
     name: NonEmptyStr
     description: Optional[str] = None
     folder: Optional[str] = None
+    directory: Optional[str] = None
     priority: int = Field(default=3, ge=1, le=4)
 
 
@@ -32,6 +33,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[NonEmptyStr] = None
     description: Optional[str] = None
     folder: Optional[str] = None
+    directory: Optional[str] = None
     archived: Optional[bool] = None
     priority: Optional[int] = Field(default=None, ge=1, le=4)
 
@@ -41,6 +43,7 @@ class ProjectRead(BaseModel):
     name: str
     description: Optional[str] = None
     folder: Optional[str] = None
+    directory: Optional[str] = None
     archived: bool = False
     priority: int = 3
     created_at: datetime
@@ -119,6 +122,7 @@ def _validate_date_range(start: Optional[datetime], end: Optional[datetime]) -> 
 class TaskCreate(BaseModel):
     title: NonEmptyStr
     description: Optional[str] = None
+    command: Optional[str] = None
     project_id: BodyId
     resource_ids: list[BodyId] = []
     depends_on_id: OptionalBodyId = None
@@ -137,6 +141,7 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: Optional[NonEmptyStr] = None
     description: Optional[str] = None
+    command: Optional[str] = None
     resource_ids: Optional[list[BodyId]] = None
     depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
@@ -144,6 +149,8 @@ class TaskUpdate(BaseModel):
     load: Optional[PositiveFloat] = None
     duration: Optional[PositiveFloat] = None
     status: Optional[TaskStatus] = None
+    exit_code: Optional[int] = None
+    log_tail: Optional[str] = None
 
     @model_validator(mode="after")
     def end_after_start(self) -> "TaskUpdate":
@@ -155,16 +162,24 @@ class TaskRead(BaseModel):
     id: int
     title: str
     description: Optional[str] = None
+    command: Optional[str] = None
     status: TaskStatus
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     load: float
     duration: Optional[float] = None
+    exit_code: Optional[int] = None
+    log_tail: Optional[str] = None
     project_id: int
     resource_ids: list[int] = []
     depends_on_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
+
+
+class RunnerClaimRead(TaskRead):
+    """TaskRead extended with project context for the runner daemon."""
+    project_directory: Optional[str] = None
 
 
 class DayUtilizationRead(BaseModel):

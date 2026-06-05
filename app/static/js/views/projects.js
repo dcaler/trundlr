@@ -124,6 +124,7 @@ async function showProjectsList(el, editingId = null) {
             <div><label>Name</label><input name="name" value="${escHtml(p.name)}" required style="width:180px"></div>
             <div><label>Folder</label><input name="folder" value="${escHtml(p.folder || '')}" style="width:140px"></div>
             <div><label>Description</label><input name="description" value="${escHtml(p.description || '')}" style="width:220px"></div>
+            <div><label>Directory</label><input name="directory" value="${escHtml(p.directory || '')}" placeholder="/path/on/runner" style="width:200px"></div>
             <div><label>Priority</label>${prioritySelect(p.priority || 3)}</div>
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
@@ -153,6 +154,7 @@ async function showProjectsList(el, editingId = null) {
       <div><label>Name</label><input name="name" required placeholder="Project name" style="width:200px"></div>
       <div><label>Folder</label><input name="folder" placeholder="Optional folder" style="width:160px"></div>
       <div><label>Description</label><input name="description" placeholder="Optional" style="width:260px"></div>
+      <div><label>Directory</label><input name="directory" placeholder="/path/on/runner" style="width:200px"></div>
       <div><label>Priority</label>${prioritySelect(3)}</div>
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ New Project</button>
@@ -177,6 +179,7 @@ async function showProjectsList(el, editingId = null) {
         name: fd.get('name'),
         folder: fd.get('folder') || null,
         description: fd.get('description') || null,
+        directory: fd.get('directory') || null,
         priority: parseInt(fd.get('priority')) || 3,
       });
       await showProjectsList(el);
@@ -202,6 +205,7 @@ async function showProjectsList(el, editingId = null) {
           name: fd.get('name'),
           folder: fd.get('folder') || null,
           description: fd.get('description') || null,
+          directory: fd.get('directory') || null,
           priority: parseInt(fd.get('priority')) || 3,
         });
         await showProjectsList(el);
@@ -271,7 +275,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
           </label>`
         ).join('');
 
-  const statusOptions = (selected) => ['todo', 'in_progress', 'blocked', 'done']
+  const statusOptions = (selected) => ['todo', 'in_progress', 'blocked', 'done', 'failed']
     .map(s => `<option value="${s}"${s === selected ? ' selected' : ''}>${s.replace('_', ' ')}</option>`)
     .join('');
 
@@ -282,7 +286,8 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         <td colspan="9">
           <form class="form-row edit-task-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
             <div><label>Title</label><input name="title" value="${escHtml(t.title)}" required style="width:160px"></div>
-            <div><label>Description / Command</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description or shell command"></div>
+            <div><label>Description</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description"></div>
+            <div><label>Command</label><input name="command" value="${escHtml(t.command || '')}" style="width:280px;font-family:monospace" placeholder="shell command (cpu/gpu tasks)"></div>
             <div><label>Resources</label>${resourceCheckboxes(t.resource_ids || [])}</div>
             <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(t.depends_on_id, t.id)}</select></div>
             <div><label>Start</label>
@@ -300,10 +305,12 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
             <div><label>Load</label><input type="number" name="load" value="${t.load}" min="0.01" step="any" style="width:70px"></div>
             <div><label>Duration (h)</label><input type="number" name="duration" value="${t.duration != null ? t.duration : ''}" min="0.01" step="any" style="width:70px" placeholder="—"></div>
             <div><label>Status</label><select name="status">${statusOptions(t.status)}</select></div>
+            ${t.exit_code != null ? `<div><label>Exit code</label><input value="${escHtml(String(t.exit_code))}" readonly style="width:70px"></div>` : ''}
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
               <button type="button" class="btn btn-ghost cancel-task-edit">Cancel</button>
             </div>
+            ${t.log_tail ? `<div style="width:100%;margin-top:0.5rem"><label>Log output</label><textarea readonly style="width:100%;height:10rem;font-family:monospace;font-size:0.75rem;white-space:pre">${escHtml(t.log_tail)}</textarea></div>` : ''}
           </form>
         </td>
       </tr>`;
@@ -311,12 +318,14 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     return `<tr>
       <td>
         <button class="btn btn-ghost edit-task-btn" data-id="${t.id}" style="padding:0;text-align:left">${escHtml(t.title)}</button>
-        ${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px;font-family:monospace">${escHtml(t.description)}</div>` : ''}
+        ${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">${escHtml(t.description)}</div>` : ''}
+        ${t.command ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px;font-family:monospace">$ ${escHtml(t.command)}</div>` : ''}
       </td>
       <td>
         <select class="status-select" data-id="${t.id}" style="font-size:0.8rem">
           ${statusOptions(t.status)}
         </select>
+        ${t.exit_code != null ? `<div style="font-size:0.7rem;color:var(--text-muted)">exit: ${escHtml(String(t.exit_code))}</div>` : ''}
       </td>
       <td>${resNames || '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="color:var(--text-muted);font-size:0.8rem">${t.depends_on_id && taskById[t.depends_on_id] ? '↳ ' + escHtml(taskById[t.depends_on_id].title) : '—'}</td>
@@ -338,12 +347,14 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
     </div>
     <h1>${priorityBadge(project.priority)}${escHtml(project.name)}</h1>
     ${project.folder ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Folder:</strong> ${escHtml(project.folder)}</p>` : ''}
+    ${project.directory ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Directory:</strong> <code>${escHtml(project.directory)}</code></p>` : ''}
     ${project.description ? `<p style="color:var(--text-muted);margin-bottom:1rem">${escHtml(project.description)}</p>` : ''}
 
     <h2 style="margin-top:1.5rem;margin-bottom:0.75rem">Add task</h2>
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
       <div><label>Title *</label><input name="title" required placeholder="Task title" style="width:180px"></div>
-      <div><label>Description / Command</label><input name="description" placeholder="Optional description or shell command" style="width:240px"></div>
+      <div><label>Description</label><input name="description" placeholder="Optional description" style="width:240px"></div>
+      <div><label>Command</label><input name="command" placeholder="shell command (cpu/gpu tasks)" style="width:280px;font-family:monospace"></div>
       <div><label>Resources</label>${resourceCheckboxes([])}</div>
       <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(null, null)}</select></div>
       <div><label>Start</label>
@@ -392,6 +403,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       await api.post('/tasks/', {
         title: fd.get('title'),
         description: fd.get('description') || null,
+        command: fd.get('command') || null,
         project_id: projectId,
         resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
         depends_on_id: depRaw ? parseInt(depRaw) : null,
@@ -423,6 +435,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         await api.patch(`/tasks/${editRow.dataset.id}`, {
           title: fd.get('title'),
           description: fd.get('description') || null,
+          command: fd.get('command') || null,
           resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
           depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
           start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,

@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import apply_migrations, create_db_and_tables, init_engine
 from app.routers import projects, resources, schedule, settings, tasks
-from app.routers import caldav
+from app.routers import caldav, runner
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -81,6 +81,16 @@ app.include_router(tasks.router)
 app.include_router(schedule.router)
 app.include_router(settings.router)
 app.include_router(caldav.router)
+app.include_router(runner.router)
+
+
+@app.get("/runner.py", include_in_schema=False)
+def download_runner():
+    return FileResponse(
+        Path(__file__).parent.parent / "runner.py",
+        media_type="text/x-python",
+        filename="runner.py",
+    )
 
 
 @app.get("/.well-known/caldav", include_in_schema=False)

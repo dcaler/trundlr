@@ -134,8 +134,24 @@ def apply_migrations(engine):
             conn.commit()
 
         result = conn.execute(text("PRAGMA table_info(project)"))
-        if "priority" not in {row[1] for row in result}:
+        project_cols2 = {row[1] for row in result}
+        if "priority" not in project_cols2:
             conn.execute(text("ALTER TABLE project ADD COLUMN priority INTEGER NOT NULL DEFAULT 3"))
+            conn.commit()
+        if "directory" not in project_cols2:
+            conn.execute(text("ALTER TABLE project ADD COLUMN directory TEXT"))
+            conn.commit()
+
+        result = conn.execute(text("PRAGMA table_info(task)"))
+        task_cols2 = {row[1] for row in result}
+        if "command" not in task_cols2:
+            conn.execute(text("ALTER TABLE task ADD COLUMN command TEXT"))
+            conn.commit()
+        if "exit_code" not in task_cols2:
+            conn.execute(text("ALTER TABLE task ADD COLUMN exit_code INTEGER"))
+            conn.commit()
+        if "log_tail" not in task_cols2:
+            conn.execute(text("ALTER TABLE task ADD COLUMN log_tail TEXT"))
             conn.commit()
 
 
