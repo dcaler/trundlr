@@ -57,14 +57,28 @@ function setupAutoCalcEnd(form) {
 }
 
 // When resources are selected in a task form, fill start_date from the first resource's next slot.
-function setupResourceAutoStart(form) {
+// resourceById: map of id → resource object (used to auto-set load for cpu/gpu resources).
+function setupResourceAutoStart(form, resourceById = {}) {
   const startDateEl = form.querySelector('[name="start_date"]');
   const startTimeEl = form.querySelector('[name="start_time"]');
+  const loadEl      = form.querySelector('[name="load"]');
   if (!startDateEl) return;
 
   async function refreshStart() {
     const checked = [...form.querySelectorAll('[name="resource_ids"]:checked')];
     if (!checked.length) return;
+
+    // For cpu/gpu resources the runner runs one task at a time, so each task should
+    // occupy the full resource (load = capacity). This prevents the scheduler from
+    // stacking multiple tasks into the same time slot.
+    if (loadEl) {
+      const computeRes = checked
+        .map(cb => resourceById[parseInt(cb.value)])
+        .filter(r => r && (r.kind === 'cpu' || r.kind === 'gpu') && r.capacity != null);
+      if (computeRes.length > 0) {
+        loadEl.value = computeRes[0].capacity;
+      }
+    }
 
     // Start no earlier than now; also no earlier than the last task on each checked resource.
     let bestMs = Date.now();
@@ -391,7 +405,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
 
   const addForm = el.querySelector('#add-task-form');
   setupAutoCalcEnd(addForm);
-  setupResourceAutoStart(addForm);
+  setupResourceAutoStart(addForm, resourceById);
   setupDependencyAutoStart(addForm, taskById);
 
   el.querySelector('#add-task-form').addEventListener('submit', async e => {
