@@ -23,6 +23,7 @@ class TaskStatus(str, Enum):
     in_progress = "in_progress"
     blocked = "blocked"
     done = "done"
+    failed = "failed"
 
 
 def _utcnow() -> datetime:
@@ -34,6 +35,7 @@ class Project(SQLModel, table=True):
     name: str = Field(index=True)
     description: Optional[str] = Field(default=None)
     folder: Optional[str] = Field(default=None)
+    directory: Optional[str] = Field(default=None)  # working dir on runner host
     archived: bool = Field(default=False)
     priority: int = Field(default=3)  # 1=Critical 2=High 3=Medium 4=Low
     created_at: datetime = Field(default_factory=_utcnow)
@@ -74,6 +76,10 @@ class Task(SQLModel, table=True):
     load: float = Field(default=1.0)
     # Total elapsed calendar duration in hours (informational, not used by engine).
     duration: Optional[float] = Field(default=None)
+    # Execution fields — populated by the runner daemon.
+    command:   Optional[str] = Field(default=None)  # shell command to execute
+    exit_code: Optional[int] = Field(default=None)  # process exit code after completion
+    log_tail:  Optional[str] = Field(default=None)  # last N lines of stdout+stderr
 
     # A task must belong to a project; resource assignments live in TaskResource.
     project_id: int = Field(foreign_key="project.id", nullable=False, index=True)

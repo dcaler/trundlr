@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
+COPY runner.py ./runner.py
 
 # Create directory for SQLite database persistence
 RUN mkdir -p /app/data

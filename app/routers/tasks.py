@@ -46,12 +46,18 @@ def _task_read(task: Task, session: Session) -> TaskRead:
 
 @router.get("/", response_model=List[TaskRead])
 def list_tasks(
-    project_id: int | None = OptionalDBIdQuery(), session: Session = Depends(get_db)
+    project_id: int | None = OptionalDBIdQuery(),
+    resource_id: int | None = OptionalDBIdQuery(),
+    session: Session = Depends(get_db),
 ):
     from sqlalchemy import nullslast
     stmt = select(Task).order_by(nullslast(Task.start_date))
     if project_id is not None:
         stmt = stmt.where(Task.project_id == project_id)
+    if resource_id is not None:
+        stmt = stmt.join(TaskResource, Task.id == TaskResource.task_id).where(
+            TaskResource.resource_id == resource_id
+        )
     tasks = session.exec(stmt).all()
 
     # Bulk-fetch all task-resource rows to avoid N+1 queries
@@ -158,6 +164,7 @@ def copy_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     new_task = Task(
         title=f"{task.title} (copy)",
         description=task.description,
+        command=task.command,
         start_date=new_start,
         end_date=new_end,
         load=task.load,
