@@ -138,8 +138,12 @@ def apply_migrations(engine):
         if "priority" not in project_cols2:
             conn.execute(text("ALTER TABLE project ADD COLUMN priority INTEGER NOT NULL DEFAULT 3"))
             conn.commit()
-        if "directory" not in project_cols2:
-            conn.execute(text("ALTER TABLE project ADD COLUMN directory TEXT"))
+        if "directory" in project_cols2:
+            # Merge directory into folder (folder takes precedence if already set), then drop.
+            conn.execute(text(
+                "UPDATE project SET folder = directory WHERE folder IS NULL AND directory IS NOT NULL"
+            ))
+            conn.execute(text("ALTER TABLE project DROP COLUMN directory"))
             conn.commit()
 
         result = conn.execute(text("PRAGMA table_info(task)"))

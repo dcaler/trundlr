@@ -136,9 +136,8 @@ async function showProjectsList(el, editingId = null) {
         <td colspan="4">
           <form class="form-row edit-project-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
             <div><label>Name</label><input name="name" value="${escHtml(p.name)}" required style="width:180px"></div>
-            <div><label>Folder</label><input name="folder" value="${escHtml(p.folder || '')}" style="width:140px"></div>
+            <div><label>Directory</label><input name="folder" value="${escHtml(p.folder || '')}" placeholder="/path/on/runner" style="width:200px"></div>
             <div><label>Description</label><input name="description" value="${escHtml(p.description || '')}" style="width:220px"></div>
-            <div><label>Directory</label><input name="directory" value="${escHtml(p.directory || '')}" placeholder="/path/on/runner" style="width:200px"></div>
             <div><label>Priority</label>${prioritySelect(p.priority || 3)}</div>
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
@@ -166,9 +165,8 @@ async function showProjectsList(el, editingId = null) {
 
     <form id="create-project-form" class="form-row" style="margin-bottom:1.5rem">
       <div><label>Name</label><input name="name" required placeholder="Project name" style="width:200px"></div>
-      <div><label>Folder</label><input name="folder" placeholder="Optional folder" style="width:160px"></div>
+      <div><label>Directory</label><input name="folder" placeholder="/path/on/runner" style="width:200px"></div>
       <div><label>Description</label><input name="description" placeholder="Optional" style="width:260px"></div>
-      <div><label>Directory</label><input name="directory" placeholder="/path/on/runner" style="width:200px"></div>
       <div><label>Priority</label>${prioritySelect(3)}</div>
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ New Project</button>
@@ -179,7 +177,7 @@ async function showProjectsList(el, editingId = null) {
       ? '<p style="color:var(--text-muted)">No projects yet — create one above.</p>'
       : `<table>
           <thead><tr>
-            <th>Name</th><th>Folder</th><th>Description</th><th style="width:160px"></th>
+            <th>Name</th><th>Directory</th><th>Description</th><th style="width:160px"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`}
@@ -193,7 +191,6 @@ async function showProjectsList(el, editingId = null) {
         name: fd.get('name'),
         folder: fd.get('folder') || null,
         description: fd.get('description') || null,
-        directory: fd.get('directory') || null,
         priority: parseInt(fd.get('priority')) || 3,
       });
       await showProjectsList(el);
@@ -219,7 +216,6 @@ async function showProjectsList(el, editingId = null) {
           name: fd.get('name'),
           folder: fd.get('folder') || null,
           description: fd.get('description') || null,
-          directory: fd.get('directory') || null,
           priority: parseInt(fd.get('priority')) || 3,
         });
         await showProjectsList(el);
@@ -360,8 +356,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       <button class="btn btn-ghost back-btn">← Projects</button>
     </div>
     <h1>${priorityBadge(project.priority)}${escHtml(project.name)}</h1>
-    ${project.folder ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Folder:</strong> ${escHtml(project.folder)}</p>` : ''}
-    ${project.directory ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Directory:</strong> <code>${escHtml(project.directory)}</code></p>` : ''}
+    ${project.folder ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Directory:</strong> <code>${escHtml(project.folder)}</code></p>` : ''}
     ${project.description ? `<p style="color:var(--text-muted);margin-bottom:1rem">${escHtml(project.description)}</p>` : ''}
 
     <h2 style="margin-top:1.5rem;margin-bottom:0.75rem">Add task</h2>
