@@ -128,7 +128,7 @@ function buildGanttBarsHtml(tasks, fromDate, toDate, priorityByProject = {}) {
     const startLabel = task.start_date.replace('T', ' ').slice(0, 16);
     const endLabel   = task.end_date ? task.end_date.replace('T', ' ').slice(0, 16) : '∞';
     const descLine   = task.description ? `\n${escHtml(task.description)}` : '';
-    const priorityCls = priority <= 2 ? ` bar-p${priority}` : '';
+    const priorityCls = priority ? ` bar-p${priority}` : '';
     return `<div class="gantt-bar bar-${escHtml(task.status)}${priorityCls}"
                  style="left:${left}px;width:${width}px;top:${top}px"
                  title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}${descLine}"

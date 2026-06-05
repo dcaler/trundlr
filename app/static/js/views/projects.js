@@ -4,7 +4,7 @@ const PRIORITY_LABELS = { 1: 'P1 – Critical', 2: 'P2 – High', 3: 'P3 – Med
 const PRIORITY_KEYS   = [1, 2, 3, 4];
 
 function priorityBadge(p) {
-  if (!p || p >= 3) return '';
+  if (!p) return '';
   return `<span class="badge priority-p${p}" style="font-size:0.7em;margin-right:0.3em">P${p}</span>`;
 }
 
