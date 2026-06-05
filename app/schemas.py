@@ -25,7 +25,6 @@ class ProjectCreate(BaseModel):
     name: NonEmptyStr
     description: Optional[str] = None
     folder: Optional[str] = None
-    directory: Optional[str] = None
     priority: int = Field(default=3, ge=1, le=4)
 
 
@@ -33,7 +32,6 @@ class ProjectUpdate(BaseModel):
     name: Optional[NonEmptyStr] = None
     description: Optional[str] = None
     folder: Optional[str] = None
-    directory: Optional[str] = None
     archived: Optional[bool] = None
     priority: Optional[int] = Field(default=None, ge=1, le=4)
 
@@ -43,7 +41,6 @@ class ProjectRead(BaseModel):
     name: str
     description: Optional[str] = None
     folder: Optional[str] = None
-    directory: Optional[str] = None
     archived: bool = False
     priority: int = 3
     created_at: datetime

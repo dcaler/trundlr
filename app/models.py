@@ -34,8 +34,7 @@ class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = Field(default=None)
-    folder: Optional[str] = Field(default=None)
-    directory: Optional[str] = Field(default=None)  # working dir on runner host
+    folder: Optional[str] = Field(default=None)  # grouping label and runner working dir
     archived: bool = Field(default=False)
     priority: int = Field(default=3)  # 1=Critical 2=High 3=Medium 4=Low
     created_at: datetime = Field(default_factory=_utcnow)

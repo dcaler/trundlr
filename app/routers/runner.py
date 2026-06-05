@@ -77,7 +77,7 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     return RunnerClaimRead(
         **task.model_dump(),
         resource_ids=rids,
-        project_directory=project.directory if project else None,
+        project_directory=project.folder if project else None,
     )
 
 
