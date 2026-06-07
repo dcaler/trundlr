@@ -27,20 +27,28 @@ registerView('/helper', async (el) => {
         </tbody>
       </table>`;
 
-  // Generate per-resource screen launch commands
+  // Generate per-resource screen launch commands (two steps each)
   const screenCmds = computeResources.length === 0
     ? '# (no cpu/gpu resources defined yet)'
     : computeResources.map(r => {
-        const slug = escHtml(r.name.toLowerCase().replace(/\s+/g, '-'));
-        return `# ${escHtml(r.kind.toUpperCase())} — ${escHtml(r.name)} (resource ID ${escHtml(String(r.id))})
-screen -dmS runner-${slug} bash -c "cd ~/trundlr && RUNNER_RESOURCE_ID=${escHtml(String(r.id))} RUNNER_API_URL=${escHtml(apiUrl)} python3 runner.py 2>&1 | tee logs/runner-${slug}.log"`;
+        const slug = escHtml(r.name.toLowerCase().replace(/\s+/g, '_'));
+        const name = escHtml(r.name);
+        const id   = escHtml(String(r.id));
+        const kind = escHtml(r.kind.toUpperCase());
+        return `# ${kind} — ${name} (resource ID ${id})
+
+# 1. Start the screen session:
+screen -S trundlr_${slug}
+
+# 2. Inside the screen, run the runner (then Ctrl-A D to detach):
+RUNNER_RESOURCE_ID=${id} RUNNER_API_URL=${escHtml(apiUrl)} python3 runner.py 2>&1 | tee logs/runner-${slug}.log`;
       }).join('\n\n');
 
   const attachCmds = computeResources.length === 0
     ? '# (no runners to attach to)'
     : computeResources.map(r => {
-        const slug = r.name.toLowerCase().replace(/\s+/g, '-');
-        return `screen -r runner-${escHtml(slug)}   # attach to ${escHtml(r.name)} runner`;
+        const slug = escHtml(r.name.toLowerCase().replace(/\s+/g, '_'));
+        return `screen -r trundlr_${slug}   # attach to ${escHtml(r.name)} runner`;
       }).join('\n');
 
   el.innerHTML = `
@@ -79,8 +87,7 @@ screen -dmS runner-${slug} bash -c "cd ~/trundlr && RUNNER_RESOURCE_ID=${escHtml
       server and copy the script there. Replace <code>oddjob</code> with your server's hostname or IP.
     </p>
     ${pre(`# On your Mac — open Terminal and run:
-ssh oddjob "mkdir -p ~/trundlr/logs"
-scp ~/Downloads/runner.py oddjob:~/trundlr/runner.py`)}
+scp ~/Downloads/runner.py oddjob:/path/to/runner.py`)}
     <p style="color:var(--text-muted);margin-top:0.75rem">
       Then SSH in and confirm Python 3.8+ is available:
     </p>
@@ -95,11 +102,10 @@ python3 --version   # must be 3.8 or later`)}
       Each <code>screen</code> session runs independently in the background and survives logout.
     </p>
     <p style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent, #888);border-radius:4px;padding:0.75rem 1rem;max-width:680px">
-      <strong>Where it runs:</strong> <code>runner.py</code> must live in, and be launched from,
-      the <strong>Trundlr directory</strong> on the production machine
-      (<code>~/trundlr</code> in these examples). The commands below <code>cd</code> into that
-      directory first. Per-task logs are written to its <code>logs/</code> subdirectory
-      (<code>~/trundlr/logs/task-{id}.log</code>) — never inside a project's working directory.
+      <strong>Where it runs:</strong> <code>cd</code> into the directory containing
+      <code>runner.py</code> before starting the screen session. The commands above use relative
+      paths from that directory. Per-task logs are written to its <code>logs/</code> subdirectory
+      (<code>logs/task-{id}.log</code>) — never inside a project's working directory.
     </p>
     ${pre(screenCmds)}
     <p style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent, #888);border-radius:4px;padding:0.75rem 1rem;max-width:680px;margin-top:0.75rem">
