@@ -7,7 +7,7 @@ function taskSortKey(t) {
   return t.start_date ? new Date(t.start_date).getTime() : Infinity;
 }
 
-async function showTaskBoard(el, hideCompleted = false) {
+async function showTaskBoard(el, showCompleted = false) {
   el.innerHTML = '<p class="loading">Loading…</p>';
 
   const [tasks, projects, resources] = await Promise.all([
@@ -20,7 +20,7 @@ async function showTaskBoard(el, hideCompleted = false) {
   const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
   const byResource       = Object.fromEntries(resources.map(r => [r.id, r.name]));
 
-  const visible = hideCompleted ? tasks.filter(t => t.status !== 'done') : tasks;
+  const visible = showCompleted ? tasks : tasks.filter(t => t.status !== 'done');
   // Primary sort: start_date (nulls last). Secondary: project priority (1=highest).
   visible.sort((a, b) =>
     taskSortKey(a) - taskSortKey(b) ||
@@ -51,7 +51,7 @@ async function showTaskBoard(el, hideCompleted = false) {
     </tr>`;
   }).join('');
 
-  const hideDoneChecked = hideCompleted ? 'checked' : '';
+  const showDoneChecked = showCompleted ? 'checked' : '';
   const totalCount = tasks.length;
   const doneCount  = tasks.filter(t => t.status === 'done').length;
 
@@ -60,7 +60,7 @@ async function showTaskBoard(el, hideCompleted = false) {
       <h1 style="margin:0">Tasks</h1>
       <span style="color:var(--text-muted);font-size:0.9em">${doneCount} / ${totalCount} done</span>
       <label style="font-size:0.9em;margin-left:auto">
-        <input type="checkbox" id="hide-done" ${hideDoneChecked}> Hide completed
+        <input type="checkbox" id="show-done" ${showDoneChecked}> Show completed
       </label>
     </div>
     ${visible.length === 0
@@ -79,7 +79,7 @@ async function showTaskBoard(el, hideCompleted = false) {
         </table>`}
   `;
 
-  el.querySelector('#hide-done')?.addEventListener('change', e => {
+  el.querySelector('#show-done')?.addEventListener('change', e => {
     showTaskBoard(el, e.target.checked);
   });
 
@@ -87,7 +87,7 @@ async function showTaskBoard(el, hideCompleted = false) {
     sel.addEventListener('change', async () => {
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, { status: sel.value });
-        await showTaskBoard(el, hideCompleted);
+        await showTaskBoard(el, showCompleted);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
