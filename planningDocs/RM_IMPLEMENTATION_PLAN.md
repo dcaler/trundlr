@@ -134,9 +134,11 @@ Quickstart, env vars, API overview (FastAPI auto-generates `/docs`).
 Full-flow test: create project → resources → tasks → query schedule → detect conflict.
 - **Test:** the E2E test itself, run in CI against the built container.
 
+
 ### Step 6.2 — CI pipeline — **Haiku**
 GitHub Actions: install, lint, run pytest, build Docker image on push.
 - **Test:** pipeline goes green on a clean commit.
+
 
 ### Step 6.3 — Input validation & error-handling audit — **Opus**
 Review boundary conditions across the scheduling engine and API surface; consistent error responses; guard against malformed date ranges and capacity edge cases. A focused correctness pass where subtle gaps are costly.
@@ -159,3 +161,10 @@ Review boundary conditions across the scheduling engine and API surface; consist
 **Totals:** Opus ×4 (the load-bearing design + correctness work), Sonnet ×9 (the bulk of application code), Haiku ×6 (mechanical scaffolding & config).
 
 This keeps spend concentrated on Sonnet (the cost-effective default), pushes cheap mechanical work to Haiku, and spends Opus tokens only where a subtle error in the scheduling/capacity logic would be expensive to discover later.
+
+read @planningDocs/RM_IMPLEMENTATION_PLAN.md
+read the end of @planningDocs/build_log.md
+do the following step and note the results in planningDocs/build_log.md
+
+
+read @planningDocs/build_log.md

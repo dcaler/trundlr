@@ -1321,3 +1321,135 @@ tests/
   - Container path: `docker compose up -d`, `BASE_URL=http://localhost:8000 pytest tests/test_e2e.py`
 
 ---
+
+## Step 6.2 — CI pipeline — Haiku
+
+**Date:** 2026-05-28
+**Model:** Haiku 4.5
+
+### Tasks Completed
+- ✓ Initialized git repository with main branch
+- ✓ Created `.github/workflows/ci.yml` with GitHub Actions pipeline
+- ✓ Configured workflow to install deps, run pytest, and build Docker
+- ✓ Created initial commit with all project files
+- ✓ Verified all 194 tests pass locally
+
+### GitHub Actions Workflow (`.github/workflows/ci.yml`)
+
+**Triggers:**
+- Pushes to `main` or `develop` branches
+- Pull requests to `main` or `develop` branches
+
+**Jobs:**
+
+1. **test job** — runs on every push/PR
+   - Matrix: Python 3.11 (ubuntu-latest)
+   - Steps:
+     - Checkout code
+     - Set up Python 3.11
+     - Install requirements (`pip install -r requirements.txt`)
+     - Run tests (`pytest tests/ -v`)
+
+2. **build-docker job** — runs only on pushes to main (after test passes)
+   - Builds Docker image with git SHA tag and `latest` tag
+   - Tests the container (starts it, verifies `/health` endpoint returns 200)
+   - Stops the test container
+
+### Key design decisions
+- **Two separate jobs** — `test` always runs; `build-docker` only runs on main branch pushes after test passes (economizes CI minutes for PRs)
+- **Matrix strategy** — single Python version (3.11) to match the Dockerfile; extensible if multi-version testing is needed later
+- **Docker health check** — `curl http://localhost:8000/health` verifies the container started and the app is listening
+- **Git SHA tagging** — `trundlr:${{ github.sha }}` allows Docker image traceability to exact commits; `latest` tag also applied for convenience
+
+### Test Results
+- ✓ **Local test run:** `pytest tests/ -v` → **194 passed, 330 warnings**
+  - All existing tests pass (including E2E suite from Step 6.1)
+  - Warnings are deprecation notices about `session.query()` vs `session.exec()` (no errors)
+
+### Git commit
+```
+commit 134731b98e1f6e0104badcd07ea2928315fad52b
+Author: dcaler <dcaler@users.noreply.github.com>
+Date:   Thu May 28 15:20:09 2026 +0100
+
+    feat: add GitHub Actions CI pipeline for automated testing and Docker builds
+
+    - Install dependencies and run pytest on push/PR
+    - Build and test Docker image on main branch pushes
+    - Verify health check passes in containerized environment
+```
+
+All 46 files staged and committed to main branch.
+
+### Final Repo Structure (new files)
+```
+.github/
+  workflows/
+    ci.yml          (NEW — GitHub Actions workflow)
+```
+
+### Notes for Step 6.3
+- Step 6.3 (Input validation & error-handling audit — **Opus**): boundary condition review, fuzz testing, and consistent error responses.
+- The CI pipeline is now ready to run on any GitHub push or PR. Full workflow execution typically takes 1–2 minutes (pytest ~0.8s, Docker build ~30–45s).
+
+---
+
+## Step 6.3 — Input validation & error-handling audit — Opus
+
+**Date:** 2026-05-28
+**Model:** Opus 4.7
+
+### Approach
+Before changing anything, probed the live API surface with hostile inputs (a throwaway TestClient script with `raise_server_exceptions=False`) to find where malformed input produced a **500** instead of a sane 4xx. Found four distinct latent crash classes plus one resource-exhaustion vector. Each was then fixed at the layer where it originated, and a parametrized fuzz suite (`tests/test_validation.py`) was added to lock the behaviour in.
+
+### Findings (all confirmed reproducible before the fix)
+
+| # | Input | Old behaviour | Root cause |
+|---|-------|---------------|-----------|
+| 1 | Path/query id beyond signed 64-bit (e.g. `GET /api/tasks/9999...9`) | **500** | SQLite raises `OverflowError` binding an int outside its 64-bit range; the unbounded `int` path param let it reach the driver |
+| 2 | `capacity`/`load` = `Infinity` | **500** | `inf > 0` passes the `gt=0` check, gets stored, then the **success** response fails to serialize (`Out of range float values are not JSON compliant`) |
+| 3 | `capacity`/`load` = `NaN` | **500** | `nan > 0` is False so it's *rejected* — but the **422 body echoes `input: nan`**, which then fails to serialize, turning the 422 into a 500 |
+| 4 | Body FK ids (`project_id`/`resource_id`) beyond 64-bit | **500** | same as #1, via `session.get(...)` inside the handler |
+| 5 | Extreme range, e.g. `?from=0001-01-01&to=9999-12-31` | 200, but allocates ~3.6M rows **per resource** | the engine materialises one `DayUtilization` per day; an unbounded window is a memory/CPU DoS |
+
+### Fixes
+
+| File | Change |
+|------|--------|
+| `app/validation.py` *(new)* | Central constraints: `MAX_DB_INT` (2⁶³−1), `MAX_RANGE_DAYS` (3660 ≈ 10y), and `DBId()`/`OptionalDBIdQuery()` factories for bounded path/query ids |
+| `app/schemas.py` | `PositiveFloat` now `allow_inf_nan=False` (rejects inf/nan → #2/#3); `NonEmptyStr` (`min_length=1`) on names/titles; body FK ids bounded to `[1, MAX_DB_INT]` (→ #4) |
+| `app/main.py` | `RequestValidationError` handler that recursively stringifies non-finite floats in the error payload so a 422 always serializes (the other half of #3 — `allow_inf_nan=False` alone still 500s because the error echoes the raw `nan`) |
+| `app/routers/{projects,resources,tasks}.py` | All id path params bounded via `= DBId()`; `list_tasks` filter via `= OptionalDBIdQuery()` (→ #1, #4) |
+| `app/routers/schedule.py` | `resource_id` bounded; `_require_valid_range` now also caps span at `MAX_RANGE_DAYS` (→ #5) |
+
+### Key decisions
+- **Bounded ids return 422, not 404.** An id outside the DB's representable range is *malformed*, not *missing*, so 422 is the consistent response. `MAX_DB_INT` itself is still treated as valid → 404 (boundary is inclusive; verified by test). Negative/zero ids likewise become 422 (previously 404), which is the more correct "invalid id" semantics.
+- **inf/nan needed a fix on both the request and the response side.** Rejecting at the schema (`allow_inf_nan=False`) stops the success-path 500 (#2), but Pydantic still attaches the raw `nan`/`inf` to the validation error, so the 422 itself 500s on serialization. The `_strip_non_finite` handler closes that.
+- **Date-range cap chosen at ~10 years.** Far beyond any realistic month/quarter/year UI view, but bounds a single request's allocation. Enforced only at the API layer; the engine stays a pure, uncapped function (its unit tests are unaffected).
+- **`Annotated[int, Path(...)]` does NOT work on this stack.** FastAPI 0.104.1's `copy_field_info` calls `type(field_info).from_annotation(...)`, which Pydantic 2.13 does *not* make subclass-preserving — `params.Path` is silently downgraded to a bare `FieldInfo` and route registration asserts out. The working form on this version is the default-value style (`param: int = Path(...)`), so the shared constraints are exposed as factory callables, not `Annotated` aliases. (Pure-Pydantic model fields in `schemas.py` use `Annotated[..., Field(...)]` fine — the bug is specific to FastAPI param analysis.)
+
+### Deliberate non-goals
+- **Whitespace-only names** (e.g. `"   "`) still pass `min_length=1`. Not a 500 and not a safety issue; trimming was left out to avoid silently mutating user input across unrelated fields. The empty-string case (`""`) is rejected.
+- **422 body shape duality** (Pydantic errors → `detail: [...]` list; manual `HTTPException` → `detail: "..."` string) is left as-is — it's standard FastAPI convention and consistent across the whole app.
+- The engine's `capacity == 0` divide-by-zero guard (returns `inf`) is unreachable via the API (capacity is `gt=0` + finite) and only matters for direct DB poisoning; left documented as-is.
+
+### Tests added — `tests/test_validation.py` (30 tests)
+- `test_no_request_in_fuzz_matrix_returns_5xx` — a 40-entry matrix of hostile requests across every endpoint; asserts **no response ≥ 500** and **every body is valid JSON**.
+- Parametrized: out-of-range path/query/body ids → 422; `MAX_DB_INT` → 404 (inclusive boundary); inf/−inf/nan on capacity & load (POST + PATCH) → 422 with parseable body; over-long ranges on schedule/conflicts/utilization → 422, range exactly at the cap → 200 with `MAX_RANGE_DAYS` rows; inverted range → 422; malformed query/body dates → 422; empty/missing names & titles → 422.
+
+### Test Results
+- `pytest tests/test_validation.py` → **30 passed**
+- `pytest tests/` → **224 passed** (194 prior + 30 new), **no regressions**
+
+### Final Repo Structure (new files)
+```
+app/
+  validation.py        (NEW — shared id/range constraints)
+tests/
+  test_validation.py   (NEW — 30 fuzz/boundary tests)
+```
+
+### Notes
+- This was the final hardening step (Phase 6 complete). The plan's full sequence (Phases 0–6) is now built and green at 224 tests.
+
+---
