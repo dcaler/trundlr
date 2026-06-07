@@ -33,7 +33,7 @@ registerView('/helper', async (el) => {
     : computeResources.map(r => {
         const slug = escHtml(r.name.toLowerCase().replace(/\s+/g, '-'));
         return `# ${escHtml(r.kind.toUpperCase())} — ${escHtml(r.name)} (resource ID ${escHtml(String(r.id))})
-screen -dmS runner-${slug} bash -c "RUNNER_RESOURCE_ID=${escHtml(String(r.id))} RUNNER_API_URL=${escHtml(apiUrl)} python3 ~/trundlr/runner.py 2>&1 | tee ~/trundlr/runner-${slug}.log"`;
+screen -dmS runner-${slug} bash -c "cd ~/trundlr && RUNNER_RESOURCE_ID=${escHtml(String(r.id))} RUNNER_API_URL=${escHtml(apiUrl)} python3 runner.py 2>&1 | tee logs/runner-${slug}.log"`;
       }).join('\n\n');
 
   const attachCmds = computeResources.length === 0
@@ -79,7 +79,7 @@ screen -dmS runner-${slug} bash -c "RUNNER_RESOURCE_ID=${escHtml(String(r.id))} 
       server and copy the script there. Replace <code>oddjob</code> with your server's hostname or IP.
     </p>
     ${pre(`# On your Mac — open Terminal and run:
-ssh oddjob "mkdir -p ~/trundlr"
+ssh oddjob "mkdir -p ~/trundlr/logs"
 scp ~/Downloads/runner.py oddjob:~/trundlr/runner.py`)}
     <p style="color:var(--text-muted);margin-top:0.75rem">
       Then SSH in and confirm Python 3.8+ is available:
@@ -94,7 +94,22 @@ python3 --version   # must be 3.8 or later`)}
       Run these commands <strong>on the compute server</strong> (after SSH-ing in).
       Each <code>screen</code> session runs independently in the background and survives logout.
     </p>
+    <p style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent, #888);border-radius:4px;padding:0.75rem 1rem;max-width:680px">
+      <strong>Where it runs:</strong> <code>runner.py</code> must live in, and be launched from,
+      the <strong>Trundlr directory</strong> on the production machine
+      (<code>~/trundlr</code> in these examples). The commands below <code>cd</code> into that
+      directory first. Per-task logs are written to its <code>logs/</code> subdirectory
+      (<code>~/trundlr/logs/task-{id}.log</code>) — never inside a project's working directory.
+    </p>
     ${pre(screenCmds)}
+    <p style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent, #888);border-radius:4px;padding:0.75rem 1rem;max-width:680px;margin-top:0.75rem">
+      <strong>API URL:</strong> the runner connects back to the Trundlr server over the network —
+      the app does <strong>not</strong> run on the compute machine, so <code>localhost</code> will
+      not work there. The <code>RUNNER_API_URL</code> above is pre-filled with this server's address
+      (<code>${escHtml(apiUrl)}</code>) from the page you're viewing. If you launch the runner by
+      hand, set <code>RUNNER_API_URL</code> explicitly to that address — don't rely on the
+      <code>http://localhost:8251</code> default.
+    </p>
     <p style="color:var(--text-muted);margin-top:0.75rem">
       To check on a running runner, re-attach its screen session
       (<kbd>Ctrl-A D</kbd> to detach again):
@@ -111,7 +126,7 @@ python3 --version   # must be 3.8 or later`)}
       <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
       <tbody>
         <tr><td><code>RUNNER_RESOURCE_ID</code></td><td><em>required</em></td><td>ID of the resource to manage (Step 1)</td></tr>
-        <tr><td><code>RUNNER_API_URL</code></td><td><code>${escHtml(apiUrl)}</code></td><td>Base URL of this Trundlr server</td></tr>
+        <tr><td><code>RUNNER_API_URL</code></td><td><code>${escHtml(apiUrl)}</code></td><td>Network address of this Trundlr server (not <code>localhost</code> — the app runs on a different machine)</td></tr>
         <tr><td><code>RUNNER_POLL_INTERVAL</code></td><td><code>10</code></td><td>Seconds between polls when queue is empty</td></tr>
         <tr><td><code>RUNNER_LOG_TAIL_LINES</code></td><td><code>100</code></td><td>Lines of output stored in the task record</td></tr>
       </tbody>
@@ -123,8 +138,8 @@ python3 --version   # must be 3.8 or later`)}
     <ol style="line-height:1.9;max-width:640px;color:var(--text-muted)">
       <li>On startup the runner resets any tasks left <code>in_progress</code> from a previous crashed run to <code>failed</code>.</li>
       <li>It polls <code>POST /api/runner/{id}/claim</code> to atomically grab the next <code>todo</code> task, ordered by project priority then scheduled start time.</li>
-      <li>The task's <strong>Command</strong> is run via the shell in the project's <strong>Directory</strong> (both set in the Projects tab).</li>
-      <li>stdout + stderr are written to <code>{project_directory}/task-{id}.log</code> on the compute server.</li>
+      <li>The task's <strong>Command</strong> is run via the shell in the project's <strong>Directory</strong> (both set in the Projects tab). The Directory <strong>must be an absolute path that already exists</strong> on the runner — the runner refuses to run (marks the task <code>failed</code>) and never creates the directory, so a command can never execute in an unintended location.</li>
+      <li>stdout + stderr are written to <code>logs/task-{id}.log</code> inside the Trundlr directory (default <code>&lt;trundlr&gt;/logs/</code>, configurable via <code>RUNNER_LOG_DIR</code>) — never inside the working directory.</li>
       <li>On completion: status → <code>done</code> or <code>failed</code>, exit code, duration, and the last 100 lines of output are written back to Trundlr and visible in the task detail panel.</li>
     </ol>
   `;

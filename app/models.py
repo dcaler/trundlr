@@ -34,7 +34,7 @@ class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = Field(default=None)
-    folder: Optional[str] = Field(default=None)  # grouping label and runner working dir
+    folder: Optional[str] = Field(default=None)  # runner working dir: must be an absolute, existing path; also shown as a grouping label
     archived: bool = Field(default=False)
     priority: int = Field(default=3)  # 1=Critical 2=High 3=Medium 4=Low
     created_at: datetime = Field(default_factory=_utcnow)

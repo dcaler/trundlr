@@ -16,6 +16,14 @@ Environment variables:
     RUNNER_API_URL        (default: http://localhost:8251) Trundlr API base URL
     RUNNER_POLL_INTERVAL  (default: 10) Seconds to wait between polls when queue is empty
     RUNNER_LOG_TAIL_LINES (default: 100) Lines of task output to store in the task record
+    RUNNER_LOG_DIR        (default: <trundlr dir>/logs) Directory for per-task .log files
+
+Safety: a task command is only ever executed when the project's working
+directory is explicitly set, absolute, and already exists on disk. The runner
+never creates the working directory and never falls back to its launch
+directory, so a missing/relative/label-only value can never cause a command to
+run against an unintended location. Per-task logs are written to RUNNER_LOG_DIR,
+never inside the working directory.
 """
 
 import argparse
@@ -59,6 +67,24 @@ def _api(base_url: str, method: str, path: str, body=None):
         raise RuntimeError(f"API {method} {path} → HTTP {e.code}: {body_text}") from e
 
 
+def _resolve_workdir(raw_dir):
+    """Validate a project's working directory for command execution.
+
+    Returns ``(project_dir, None)`` only when ``raw_dir`` is explicitly set,
+    absolute, and an existing directory; otherwise ``(None, reason)``. The
+    runner never creates the directory and never falls back to its launch
+    directory, so a missing/relative/label-only value is refused, not run.
+    """
+    if not raw_dir or not str(raw_dir).strip():
+        return None, "project has no working directory set"
+    workdir = Path(str(raw_dir).strip()).expanduser()
+    if not workdir.is_absolute():
+        return None, f"working directory is not an absolute path: {raw_dir!r}"
+    if not workdir.is_dir():
+        return None, f"working directory does not exist: {raw_dir!r}"
+    return str(workdir), None
+
+
 def _tail(path: Path, n: int) -> str:
     """Return the last n lines of a file as a single string."""
     try:
@@ -90,6 +116,13 @@ def main() -> None:
         default=int(os.environ.get("RUNNER_LOG_TAIL_LINES", 100)),
         help="Lines of output to store in the task record (env: RUNNER_LOG_TAIL_LINES)",
     )
+    parser.add_argument(
+        "--log-dir",
+        default=os.environ.get(
+            "RUNNER_LOG_DIR", str(Path(__file__).resolve().parent / "logs")
+        ),
+        help="Directory for per-task .log files (env: RUNNER_LOG_DIR)",
+    )
     args = parser.parse_args()
 
     if not args.resource_id:
@@ -100,13 +133,15 @@ def main() -> None:
     resource_id = args.resource_id
     poll_interval = args.poll_interval
     log_tail_lines = args.log_tail_lines
+    log_dir = Path(args.log_dir).expanduser()
 
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
     print(
         f"[runner] Starting  resource_id={resource_id}  api={base_url}"
-        f"  poll={poll_interval}s  log_tail={log_tail_lines} lines",
+        f"  poll={poll_interval}s  log_tail={log_tail_lines} lines"
+        f"  log_dir={log_dir}",
         flush=True,
     )
 
@@ -133,8 +168,8 @@ def main() -> None:
 
         task_id = task["id"]
         command = task.get("command") or ""
-        project_dir = task.get("project_directory") or "."
-        log_file = Path(project_dir) / f"task-{task_id}.log"
+        raw_dir = task.get("project_directory")
+        log_file = log_dir / f"task-{task_id}.log"
 
         print(f"[runner] Task {task_id}: {task['title']!r}", flush=True)
 
@@ -146,13 +181,35 @@ def main() -> None:
                 print(f"[runner] Warning: PATCH failed: {e}", flush=True)
             continue
 
+        # ── Validate the working directory ─────────────────────────────────
+        # The command runs as the invoking user via the shell. To make it
+        # impossible to ever run against an unintended location, the working
+        # directory MUST be explicitly set, absolute, and already exist. We
+        # never create it and never fall back to the launch directory ("."),
+        # so a missing/relative/label-only value is refused, not executed.
+        project_dir, refusal = _resolve_workdir(raw_dir)
+        if refusal:
+            print(f"[runner] Task {task_id} REFUSED — {refusal}", flush=True)
+            try:
+                _api(base_url, "PATCH", f"/tasks/{task_id}", {
+                    "status": "failed",
+                    "exit_code": -1,
+                    "log_tail": (
+                        f"Refused to run: {refusal}. Set the project's Directory to an "
+                        "existing absolute path on the runner before retrying."
+                    ),
+                })
+            except Exception as e:
+                print(f"[runner] Warning: PATCH failed: {e}", flush=True)
+            continue
+
         # ── Execute ────────────────────────────────────────────────────────
         print(f"[runner] Running: {command!r}  cwd={project_dir!r}  log={log_file}", flush=True)
         actual_start = datetime.now(timezone.utc)
         exit_code = -1
 
         try:
-            log_file.parent.mkdir(parents=True, exist_ok=True)
+            log_dir.mkdir(parents=True, exist_ok=True)
             with open(log_file, "w") as lf:
                 proc = subprocess.Popen(
                     command,

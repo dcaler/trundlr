@@ -37,3 +37,7 @@ db.sqlite3
 *.swo
 *~
 .cache/
+
+# Runner output (per-task and per-runner logs)
+logs/
+*.log
