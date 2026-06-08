@@ -13,7 +13,7 @@ from typing import Iterable, Iterator, Optional
 
 from sqlmodel import Session, select
 
-from app.models import Resource, Task, TaskResource
+from app.models import Resource, ResourceBlockout, ResourceWindow, Task, TaskResource
 
 
 @dataclass(frozen=True)
@@ -24,8 +24,27 @@ class DayUtilization:
     utilization: float  # committed / capacity * 100 (>100 => over-allocated)
 
 
-def resource_capacity_on_day(resource: Resource, day: date) -> float:
-    """1.0 if the resource is available on this day of the week, 0.0 otherwise."""
+def resource_capacity_on_day(
+    resource: Resource,
+    day: date,
+    windows: "list[ResourceWindow] | None" = None,
+    blockouts: "list[ResourceBlockout] | None" = None,
+) -> float:
+    """1.0 if the resource is available on this day, 0.0 otherwise.
+
+    Full-day blockouts take absolute precedence.  When `windows` is not None,
+    it overrides the simple available_days bitmask; an empty list on a given
+    day_of_week means capacity 0.  When `windows` is None, the simple
+    available_from/available_to/available_days fields are used.
+    """
+    if blockouts:
+        dow = day.weekday()
+        for b in blockouts:
+            if b.start_date <= day <= b.end_date and b.from_time is None:
+                return 0.0
+    if windows is not None:
+        dow = day.weekday()
+        return 1.0 if any(w.day_of_week == dow for w in windows) else 0.0
     if not resource.available_days or not (resource.available_days & (1 << day.weekday())):
         return 0.0
     return 1.0
@@ -66,6 +85,8 @@ def compute_utilization(
     tasks: Iterable[Task],
     start: date,
     end: date,
+    windows: "list[ResourceWindow] | None" = None,
+    blockouts: "list[ResourceBlockout] | None" = None,
 ) -> list[DayUtilization]:
     """Per-day task count and utilization for one resource over [start, end].
 
@@ -76,7 +97,7 @@ def compute_utilization(
     result: list[DayUtilization] = []
     for day in _days(start, end):
         committed = daily_committed_load(task_list, day)
-        capacity = resource_capacity_on_day(resource, day)
+        capacity = resource_capacity_on_day(resource, day, windows, blockouts)
         if capacity > 0:
             utilization = committed / capacity * 100.0
         else:
@@ -92,13 +113,33 @@ def _tasks_for_resource(session: Session, resource_id: int) -> list[Task]:
     return session.exec(select(Task).where(Task.id.in_(task_ids))).all() if task_ids else []
 
 
+def _windows_for_resource(session: Session, resource_id: int) -> "list[ResourceWindow]":
+    return list(session.exec(
+        select(ResourceWindow).where(ResourceWindow.resource_id == resource_id)
+    ).all())
+
+
+def _blockouts_for_resource(session: Session, resource_id: int) -> "list[ResourceBlockout]":
+    return list(session.exec(
+        select(ResourceBlockout).where(ResourceBlockout.resource_id == resource_id)
+    ).all())
+
+
 def resource_schedule(
     session: Session, resource_id: int, start: date, end: date
 ) -> Optional[list[DayUtilization]]:
     resource = session.get(Resource, resource_id)
     if resource is None:
         return None
-    return compute_utilization(resource, _tasks_for_resource(session, resource_id), start, end)
+    windows = _windows_for_resource(session, resource_id)
+    blockouts = _blockouts_for_resource(session, resource_id)
+    return compute_utilization(
+        resource,
+        _tasks_for_resource(session, resource_id),
+        start, end,
+        windows=windows or None,
+        blockouts=blockouts or None,
+    )
 
 
 @dataclass(frozen=True)
@@ -115,6 +156,8 @@ def detect_conflicts(
     tasks: Iterable[Task],
     start: date,
     end: date,
+    windows: "list[ResourceWindow] | None" = None,
+    blockouts: "list[ResourceBlockout] | None" = None,
 ) -> list[Conflict]:
     """Days in [start, end] where more than one task is active (over-allocated).
 
@@ -124,7 +167,7 @@ def detect_conflicts(
     """
     task_list = list(tasks)
     conflicts: list[Conflict] = []
-    for row in compute_utilization(resource, task_list, start, end):
+    for row in compute_utilization(resource, task_list, start, end, windows, blockouts):
         if row.committed > row.capacity:
             contributing = [t for t in task_list if task_active_on(t, row.day)]
             conflicts.append(Conflict(
@@ -143,4 +186,12 @@ def resource_conflicts(
     resource = session.get(Resource, resource_id)
     if resource is None:
         return None
-    return detect_conflicts(resource, _tasks_for_resource(session, resource_id), start, end)
+    windows = _windows_for_resource(session, resource_id)
+    blockouts = _blockouts_for_resource(session, resource_id)
+    return detect_conflicts(
+        resource,
+        _tasks_for_resource(session, resource_id),
+        start, end,
+        windows=windows or None,
+        blockouts=blockouts or None,
+    )

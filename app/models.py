@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -82,3 +82,31 @@ class TaskResource(SQLModel, table=True):
     """Join table: a task may be assigned to multiple resources."""
     task_id: int = Field(foreign_key="task.id", primary_key=True)
     resource_id: int = Field(foreign_key="resource.id", primary_key=True)
+
+
+class ResourceWindow(SQLModel, table=True):
+    """Recurring weekly availability window for a resource. 0=Mon … 6=Sun.
+
+    When any windows exist for a resource, they replace the simple
+    available_from/available_to/available_days fields for scheduling purposes.
+    Multiple windows on the same day are each an independent available slot.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    resource_id: int = Field(foreign_key="resource.id", index=True)
+    day_of_week: int   # 0=Mon … 6=Sun
+    from_time: str     # "HH:MM"
+    to_time: str       # "HH:MM"
+
+
+class ResourceBlockout(SQLModel, table=True):
+    """A date-range exception that blocks a resource regardless of windows.
+
+    from_time/to_time = None means the entire day is blocked.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    resource_id: int = Field(foreign_key="resource.id", index=True)
+    start_date: date
+    end_date: date
+    from_time: Optional[str] = Field(default=None)   # None → full day
+    to_time: Optional[str] = Field(default=None)
+    note: Optional[str] = Field(default=None)

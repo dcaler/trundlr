@@ -195,6 +195,67 @@ class ResourceScheduleRead(BaseModel):
     days: list[DayUtilizationRead]
 
 
+class WindowCreate(BaseModel):
+    day_of_week: int = Field(ge=0, le=6)
+    from_time: str
+    to_time: str
+
+    @model_validator(mode="after")
+    def validate_times(self) -> "WindowCreate":
+        _validate_time_str(self.from_time, "from_time")
+        _validate_time_str(self.to_time, "to_time")
+        fh, fm = map(int, self.from_time.split(":"))
+        th, tm = map(int, self.to_time.split(":"))
+        if (th * 60 + tm) <= (fh * 60 + fm):
+            raise ValueError("to_time must be later than from_time")
+        return self
+
+
+class WindowRead(BaseModel):
+    id: int
+    resource_id: int
+    day_of_week: int
+    from_time: str
+    to_time: str
+
+    model_config = {"from_attributes": True}
+
+
+class BlockoutCreate(BaseModel):
+    start_date: date
+    end_date: date
+    from_time: Optional[str] = None
+    to_time: Optional[str] = None
+    note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_blockout(self) -> "BlockoutCreate":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must not be before start_date")
+        if self.from_time is not None:
+            _validate_time_str(self.from_time, "from_time")
+        if self.to_time is not None:
+            _validate_time_str(self.to_time, "to_time")
+        if self.from_time is not None and self.to_time is not None:
+            fh, fm = map(int, self.from_time.split(":"))
+            th, tm = map(int, self.to_time.split(":"))
+            if (th * 60 + tm) <= (fh * 60 + fm):
+                raise ValueError("to_time must be later than from_time")
+        return self
+
+
+class BlockoutRead(BaseModel):
+    id: int
+    resource_id: int
+    start_date: date
+    end_date: date
+    from_time: Optional[str] = None
+    to_time: Optional[str] = None
+    note: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class SettingsRead(BaseModel):
     timezone: str
     caldav_default_project_id: Optional[int] = None

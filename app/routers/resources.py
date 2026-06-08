@@ -8,8 +8,8 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, Task, TaskResource
-from app.schemas import ResourceCreate, ResourceRead, ResourceUpdate
+from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceWindow, Task, TaskResource
+from app.schemas import BlockoutCreate, BlockoutRead, ResourceCreate, ResourceRead, ResourceUpdate, WindowCreate, WindowRead
 from app.validation import DBId
 
 router = APIRouter(prefix="/api/resources", tags=["resources"])
@@ -129,8 +129,90 @@ def delete_resource(resource_id: int = DBId(), session: Session = Depends(get_db
     resource = session.get(Resource, resource_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
-    # Remove all task-resource assignments for this resource before deleting
     for tr in session.exec(select(TaskResource).where(TaskResource.resource_id == resource_id)).all():
         session.delete(tr)
+    for w in session.exec(select(ResourceWindow).where(ResourceWindow.resource_id == resource_id)).all():
+        session.delete(w)
+    for b in session.exec(select(ResourceBlockout).where(ResourceBlockout.resource_id == resource_id)).all():
+        session.delete(b)
+    session.flush()  # send child deletes to DB before removing resource (FK ordering)
     session.delete(resource)
+    session.commit()
+
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+
+@router.get("/{resource_id}/windows", response_model=List[WindowRead])
+def list_windows(resource_id: int = DBId(), session: Session = Depends(get_db)):
+    if not session.get(Resource, resource_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return session.exec(
+        select(ResourceWindow).where(ResourceWindow.resource_id == resource_id)
+    ).all()
+
+
+@router.post("/{resource_id}/windows", response_model=WindowRead, status_code=201)
+def create_window(
+    data: WindowCreate,
+    resource_id: int = DBId(),
+    session: Session = Depends(get_db),
+):
+    if not session.get(Resource, resource_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    window = ResourceWindow(resource_id=resource_id, **data.model_dump())
+    session.add(window)
+    session.commit()
+    session.refresh(window)
+    return window
+
+
+@router.delete("/{resource_id}/windows/{window_id}", status_code=204)
+def delete_window(
+    resource_id: int = DBId(),
+    window_id: int = DBId(),
+    session: Session = Depends(get_db),
+):
+    window = session.get(ResourceWindow, window_id)
+    if not window or window.resource_id != resource_id:
+        raise HTTPException(status_code=404, detail="Window not found")
+    session.delete(window)
+    session.commit()
+
+
+# ── Blockouts ─────────────────────────────────────────────────────────────────
+
+@router.get("/{resource_id}/blockouts", response_model=List[BlockoutRead])
+def list_blockouts(resource_id: int = DBId(), session: Session = Depends(get_db)):
+    if not session.get(Resource, resource_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return session.exec(
+        select(ResourceBlockout).where(ResourceBlockout.resource_id == resource_id)
+    ).all()
+
+
+@router.post("/{resource_id}/blockouts", response_model=BlockoutRead, status_code=201)
+def create_blockout(
+    data: BlockoutCreate,
+    resource_id: int = DBId(),
+    session: Session = Depends(get_db),
+):
+    if not session.get(Resource, resource_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    blockout = ResourceBlockout(resource_id=resource_id, **data.model_dump())
+    session.add(blockout)
+    session.commit()
+    session.refresh(blockout)
+    return blockout
+
+
+@router.delete("/{resource_id}/blockouts/{blockout_id}", status_code=204)
+def delete_blockout(
+    resource_id: int = DBId(),
+    blockout_id: int = DBId(),
+    session: Session = Depends(get_db),
+):
+    blockout = session.get(ResourceBlockout, blockout_id)
+    if not blockout or blockout.resource_id != resource_id:
+        raise HTTPException(status_code=404, detail="Blockout not found")
+    session.delete(blockout)
     session.commit()

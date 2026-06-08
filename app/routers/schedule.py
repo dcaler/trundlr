@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import Resource, Task, TaskResource
+from app.models import Resource, ResourceBlockout, ResourceWindow, Task, TaskResource
 from app.scheduling import compute_utilization, resource_conflicts, resource_schedule
 from app.schemas import ConflictRead, DayUtilizationRead, ResourceScheduleRead
 from app.validation import MAX_RANGE_DAYS, DBId
@@ -70,11 +70,25 @@ def get_utilization(
         if tr.task_id in all_tasks:
             by_resource.setdefault(tr.resource_id, []).append(all_tasks[tr.task_id])
 
+    # Batch-fetch windows and blockouts for all resources
+    windows_by_resource: dict[int, list[ResourceWindow]] = {}
+    for w in session.exec(select(ResourceWindow)).all():
+        windows_by_resource.setdefault(w.resource_id, []).append(w)
+    blockouts_by_resource: dict[int, list[ResourceBlockout]] = {}
+    for b in session.exec(select(ResourceBlockout)).all():
+        blockouts_by_resource.setdefault(b.resource_id, []).append(b)
+
     return [
         ResourceScheduleRead(
             resource_id=r.id,
             resource_name=r.name,
-            days=compute_utilization(r, by_resource.get(r.id, []), from_date, to_date),
+            days=compute_utilization(
+                r,
+                by_resource.get(r.id, []),
+                from_date, to_date,
+                windows=windows_by_resource.get(r.id) or None,
+                blockouts=blockouts_by_resource.get(r.id) or None,
+            ),
         )
         for r in resources
     ]
