@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-_STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+_GIT_COMMIT = os.environ.get("GIT_COMMIT", "dev")
+_STARTED_AT = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -72,7 +73,7 @@ def health():
 
 @app.get("/api/version")
 def version():
-    return {"version": _STARTED_AT}
+    return {"version": f"{_GIT_COMMIT} · {_STARTED_AT}"}
 
 
 app.include_router(projects.router)

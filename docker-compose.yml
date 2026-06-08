@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
     container_name: trundlr-app
     ports:
       - "${PORT:-8251}:8251"
