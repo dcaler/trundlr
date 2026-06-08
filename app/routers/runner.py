@@ -68,6 +68,9 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
 
     now = _now_naive(session)
     task.status = TaskStatus.in_progress
+    if task.start_date and task.end_date:
+        dur = task.end_date - task.start_date
+        task.end_date = now + dur
     task.start_date = now
     session.add(task)
     session.commit()
