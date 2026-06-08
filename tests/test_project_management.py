@@ -85,18 +85,18 @@ def test_task_list_filtered_by_project(client):
 
 def test_assign_resource_to_task(client):
     p = create_project(client)
-    r = create_resource(client, "Bob", "human", 8.0)
+    r = create_resource(client, "Bob", "human")
     t = create_task(client, p["id"], title="Code review")
 
     updated = client.patch(
         f"/api/tasks/{t['id']}",
-        json={"resource_id": r["id"]},
+        json={"resource_ids": [r["id"]]},
     ).json()
-    assert updated["resource_id"] == r["id"]
+    assert r["id"] in updated["resource_ids"]
 
     # Verify persistence via fresh GET
     fetched = client.get(f"/api/tasks/{t['id']}").json()
-    assert fetched["resource_id"] == r["id"]
+    assert r["id"] in fetched["resource_ids"]
 
 
 def test_assign_with_dates_and_load(client):
@@ -105,12 +105,12 @@ def test_assign_with_dates_and_load(client):
     t = create_task(
         client, p["id"],
         title="Training run",
-        resource_id=r["id"],
+        resource_ids=[r["id"]],
         start_date="2026-06-01",
         end_date="2026-06-07",
         load=2.0,
     )
-    assert t["resource_id"] == r["id"]
+    assert r["id"] in t["resource_ids"]
     assert t["start_date"].startswith("2026-06-01")
     assert t["end_date"].startswith("2026-06-07")
     assert t["load"] == pytest.approx(2.0)
@@ -131,11 +131,11 @@ def test_status_change_persists(client):
 def test_unassign_resource(client):
     p = create_project(client)
     r = create_resource(client)
-    t = create_task(client, p["id"], resource_id=r["id"])
-    assert t["resource_id"] == r["id"]
+    t = create_task(client, p["id"], resource_ids=[r["id"]])
+    assert r["id"] in t["resource_ids"]
 
-    client.patch(f"/api/tasks/{t['id']}", json={"resource_id": None})
-    assert client.get(f"/api/tasks/{t['id']}").json()["resource_id"] is None
+    client.patch(f"/api/tasks/{t['id']}", json={"resource_ids": []})
+    assert client.get(f"/api/tasks/{t['id']}").json()["resource_ids"] == []
 
 
 # ── Cascade / referential integrity ──────────────────────────────────────────
@@ -156,27 +156,27 @@ def test_delete_project_cascades_tasks(client):
 def test_delete_resource_unassigns_tasks(client):
     p = create_project(client)
     r = create_resource(client)
-    t = create_task(client, p["id"], resource_id=r["id"])
-    assert t["resource_id"] == r["id"]
+    t = create_task(client, p["id"], resource_ids=[r["id"]])
+    assert r["id"] in t["resource_ids"]
 
     resp = client.delete(f"/api/resources/{r['id']}")
     assert resp.status_code == 204
 
     # Task still exists but is unassigned
     fetched = client.get(f"/api/tasks/{t['id']}").json()
-    assert fetched["resource_id"] is None
+    assert fetched["resource_ids"] == []
 
 
 def test_full_flow(client):
     """End-to-end: create project + resource → add task → assign → verify."""
     project = create_project(client, "Website Redesign", "Q3 initiative")
-    resource = create_resource(client, "Alice", "human", 8.0)
+    resource = create_resource(client, "Alice", "human")
 
     task = create_task(
         client,
         project["id"],
         title="Wireframes",
-        resource_id=resource["id"],
+        resource_ids=[resource["id"]],
         start_date="2026-07-01",
         end_date="2026-07-05",
         load=4.0,
@@ -185,7 +185,7 @@ def test_full_flow(client):
 
     # Assert all fields
     assert task["project_id"] == project["id"]
-    assert task["resource_id"] == resource["id"]
+    assert resource["id"] in task["resource_ids"]
     assert task["start_date"].startswith("2026-07-01")
     assert task["load"] == pytest.approx(4.0)
     assert task["status"] == "in_progress"

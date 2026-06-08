@@ -18,7 +18,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.database import get_db
 from app.main import app
-from app.models import Project, Resource, ResourceKind, Task, TaskStatus
+from app.models import Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
 
 
 @pytest.fixture
@@ -57,7 +57,6 @@ def seeded_client(client):
         t1 = Task(
             title="Task A",
             project_id=project.id,
-            resource_id=resource.id,
             start_date=date(2026, 6, 1),
             end_date=date(2026, 6, 2),
             load=2.0,
@@ -66,7 +65,6 @@ def seeded_client(client):
         t2 = Task(
             title="Task B",
             project_id=project.id,
-            resource_id=resource.id,
             start_date=date(2026, 6, 2),
             end_date=date(2026, 6, 3),
             load=2.0,
@@ -74,12 +72,17 @@ def seeded_client(client):
         t3 = Task(
             title="Task C",
             project_id=project.id,
-            resource_id=resource.id,
             start_date=date(2026, 6, 2),
             end_date=date(2026, 6, 3),
             load=2.0,
         )
         session.add_all([t1, t2, t3])
+        session.flush()
+        session.add_all([
+            TaskResource(task_id=t1.id, resource_id=resource.id),
+            TaskResource(task_id=t2.id, resource_id=resource.id),
+            TaskResource(task_id=t3.id, resource_id=resource.id),
+        ])
         session.commit()
 
         # Return IDs for use in tests

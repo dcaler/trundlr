@@ -5,7 +5,7 @@ from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.models import Project, Resource, ResourceKind, Task
+from app.models import Project, Resource, ResourceKind, Task, TaskResource
 from app.scheduling import (
     compute_utilization,
     daily_committed_load,
@@ -28,9 +28,9 @@ def _mk_resource(capacity=None, kind=ResourceKind.human, rid=1,
     return r
 
 
-def _mk_tasks(specs, rid=1):
+def _mk_tasks(specs):
     return [
-        Task(title="t", project_id=1, resource_id=rid, load=load, start_date=start, end_date=end)
+        Task(title="t", project_id=1, load=load, start_date=start, end_date=end)
         for load, start, end in specs
     ]
 
@@ -184,16 +184,13 @@ def test_compute_utilization_table(name, capacity, kind, specs, start, end, expe
         expected_day += timedelta(days=1)
 
 
-def test_compute_utilization_filters_by_resource():
+def test_compute_utilization_single_task():
     # Jun 1 2026 = Monday; 09:00-17:00 → capacity 8 h
     resource = _mk_resource(rid=1)
     mine = Task(
-        title="mine", project_id=1, resource_id=1, load=4.0, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)
+        title="mine", project_id=1, load=4.0, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)
     )
-    other = Task(
-        title="other", project_id=1, resource_id=2, load=8.0, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)
-    )
-    result = compute_utilization(resource, [mine, other], D(2026, 6, 1), D(2026, 6, 1))
+    result = compute_utilization(resource, [mine], D(2026, 6, 1), D(2026, 6, 1))
     assert result[0].committed == 4.0
     assert result[0].utilization == pytest.approx(50.0)
 
@@ -259,16 +256,16 @@ def test_resource_schedule_db(session):
                         available_from="09:00", available_to="17:00", available_days=31)
     session.add_all([project, resource])
     session.commit()
-    session.add(
-        Task(
-            title="t",
-            project_id=project.id,
-            resource_id=resource.id,
-            load=4.0,
-            start_date=D(2026, 6, 1),
-            end_date=D(2026, 6, 2),
-        )
+    task = Task(
+        title="t",
+        project_id=project.id,
+        load=4.0,
+        start_date=D(2026, 6, 1),
+        end_date=D(2026, 6, 2),
     )
+    session.add(task)
+    session.flush()
+    session.add(TaskResource(task_id=task.id, resource_id=resource.id))
     session.commit()
 
     sched = resource_schedule(session, resource.id, D(2026, 6, 1), D(2026, 6, 3))

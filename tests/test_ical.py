@@ -63,7 +63,7 @@ def test_ical_includes_scheduled_task(client):
     client.post("/api/tasks/", json={
         "title": "Deploy Backend",
         "project_id": project["id"],
-        "resource_id": resource["id"],
+        "resource_ids": [resource["id"]],
         "start_date": "2026-06-01T09:00:00",
         "end_date": "2026-06-03T17:00:00",
         "load": 4.0,
@@ -84,7 +84,7 @@ def test_ical_unscheduled_task_excluded(client):
     client.post("/api/tasks/", json={
         "title": "Not Yet Scheduled",
         "project_id": project["id"],
-        "resource_id": resource["id"],
+        "resource_ids": [resource["id"]],
         "load": 1.0,
     })
 
@@ -106,7 +106,7 @@ def test_ical_task_without_end_date(client):
     client.post("/api/tasks/", json={
         "title": "Open Task",
         "project_id": project["id"],
-        "resource_id": resource["id"],
+        "resource_ids": [resource["id"]],
         "start_date": "2026-06-01T09:00:00",
         "load": 2.0,
     })

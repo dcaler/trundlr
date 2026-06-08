@@ -108,6 +108,52 @@ function wireKindToggle(container, kindSelect, showCreate = true) {
   refresh();
 }
 
+async function showResourceDetail(el, resourceId) {
+  el.innerHTML = '<p class="loading">Loading…</p>';
+  const [resource, tasks, projects] = await Promise.all([
+    api.get(`/resources/${resourceId}`),
+    api.get(`/tasks/?resource_id=${resourceId}`),
+    api.get('/projects/'),
+  ]);
+
+  const projectById = Object.fromEntries(projects.map(p => [p.id, p]));
+  const kindLabel   = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
+  const avail = AVAILABILITY_KINDS.has(resource.kind)
+    ? escHtml(availabilityLabel(resource) || '—')
+    : `${resource.capacity} slots`;
+
+  const rows = tasks.map(t => {
+    const project = projectById[t.project_id] || {};
+    return `<tr>
+      <td>${escHtml(t.title)}${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escHtml(t.description)}</div>` : ''}</td>
+      <td>${escHtml(project.name || '—')}</td>
+      <td>${statusBadge(t.status)}</td>
+      <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
+      <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:1rem">
+      <button class="btn btn-ghost back-btn">← Resources</button>
+    </div>
+    <h1>${escHtml(resource.name)}</h1>
+    <p style="color:var(--text-muted);margin-bottom:1.5rem">${escHtml(kindLabel[resource.kind] || resource.kind)} · ${avail}</p>
+
+    <h2>Tasks (${tasks.length})</h2>
+    ${tasks.length === 0
+      ? '<p style="color:var(--text-muted)">No tasks assigned to this resource.</p>'
+      : `<table>
+          <thead><tr>
+            <th>Title</th><th>Project</th><th>Status</th><th>Start</th><th>End</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`}
+  `;
+
+  el.querySelector('.back-btn').addEventListener('click', () => showResourcesList(el));
+}
+
 async function showResourcesList(el, editingId = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
   const resources = await api.get('/resources/');
@@ -142,7 +188,7 @@ async function showResourcesList(el, editingId = null) {
       : `${r.capacity} slots`;
 
     return `<tr>
-      <td><button class="btn btn-ghost edit-resource-btn" data-id="${r.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(r.name)}</button></td>
+      <td><button class="btn btn-ghost view-resource-btn" data-id="${r.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(r.name)}</button></td>
       <td>${escHtml(kindLabel[r.kind] || r.kind)}</td>
       <td>${avail}</td>
       <td style="text-align:right;white-space:nowrap">
@@ -210,6 +256,10 @@ async function showResourcesList(el, editingId = null) {
       await showResourcesList(el);
     } catch (err) { alert(`Error: ${err.message}`); }
   });
+
+  el.querySelectorAll('.view-resource-btn').forEach(btn =>
+    btn.addEventListener('click', () => showResourceDetail(el, parseInt(btn.dataset.id)))
+  );
 
   el.querySelectorAll('.edit-resource-btn').forEach(btn =>
     btn.addEventListener('click', () => showResourcesList(el, parseInt(btn.dataset.id)))

@@ -29,7 +29,8 @@ def test_startup_creates_tables_in_temp_db(temp_db):
     assert "project" in tables
     assert "resource" in tables
     assert "task" in tables
-    assert len(tables) == 3
+    assert "taskresource" in tables
+    assert "appsettings" in tables
 
 
 def test_session_dependency_yields_working_session(temp_db):

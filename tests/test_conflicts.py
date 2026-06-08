@@ -5,7 +5,7 @@ from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.models import Project, Resource, ResourceKind, Task
+from app.models import Project, Resource, ResourceKind, Task, TaskResource
 from app.scheduling import detect_conflicts, resource_conflicts
 
 D = date
@@ -21,8 +21,8 @@ def _mk_resource(capacity=None, kind=ResourceKind.gpu, rid=1):
     return r
 
 
-def _task(title, load, start, end, rid=1):
-    return Task(title=title, project_id=1, resource_id=rid, load=load, start_date=start, end_date=end)
+def _task(title, load, start, end):
+    return Task(title=title, project_id=1, load=load, start_date=start, end_date=end)
 
 
 def test_overbooked_gpu_flags_days_and_contributing_tasks():
@@ -99,13 +99,14 @@ def test_human_hours_over_allocation_is_kind_agnostic():
     assert conflicts[0].overage == pytest.approx(2.0)
 
 
-def test_contributing_tasks_exclude_nonoverlapping_and_other_resources():
+def test_contributing_tasks_exclude_nonoverlapping():
+    # `detect_conflicts` receives only the resource's own tasks (caller pre-filters).
+    # Tasks from other days should not appear in contributing tasks.
     gpu = _mk_resource(4.0, rid=1)
     a = _task("A", 3.0, D(2026, 6, 2), D(2026, 6, 2))
     b = _task("B", 3.0, D(2026, 6, 2), D(2026, 6, 2))
     earlier = _task("earlier", 4.0, D(2026, 6, 1), D(2026, 6, 1))  # different day
-    other_res = _task("other", 4.0, D(2026, 6, 2), D(2026, 6, 2), rid=2)  # different resource
-    conflicts = detect_conflicts(gpu, [a, b, earlier, other_res], D(2026, 6, 2), D(2026, 6, 2))
+    conflicts = detect_conflicts(gpu, [a, b, earlier], D(2026, 6, 2), D(2026, 6, 2))
 
     assert len(conflicts) == 1
     assert {t.title for t in conflicts[0].tasks} == {"A", "B"}
@@ -134,16 +135,17 @@ def test_resource_conflicts_db(session):
     gpu = Resource(name="dgx", kind=ResourceKind.gpu, capacity=4.0)
     session.add_all([project, gpu])
     session.commit()
-    session.add_all(
-        [
-            Task(title="A", project_id=project.id, resource_id=gpu.id, load=2.0,
-                 start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
-            Task(title="B", project_id=project.id, resource_id=gpu.id, load=2.0,
-                 start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
-            Task(title="C", project_id=project.id, resource_id=gpu.id, load=2.0,
-                 start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
-        ]
-    )
+    tasks = [
+        Task(title="A", project_id=project.id, load=2.0,
+             start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
+        Task(title="B", project_id=project.id, load=2.0,
+             start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
+        Task(title="C", project_id=project.id, load=2.0,
+             start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
+    ]
+    session.add_all(tasks)
+    session.flush()
+    session.add_all([TaskResource(task_id=t.id, resource_id=gpu.id) for t in tasks])
     session.commit()
 
     conflicts = resource_conflicts(session, gpu.id, D(2026, 6, 1), D(2026, 6, 2))

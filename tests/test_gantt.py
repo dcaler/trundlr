@@ -131,7 +131,7 @@ def test_schedule_endpoint_matches_seeded_task(api_client):
     api_client.post("/api/tasks/", json={
         "title": "Design",
         "project_id": project["id"],
-        "resource_id": resource["id"],
+        "resource_ids": [resource["id"]],
         "start_date": "2026-06-03",
         "end_date": "2026-06-05",
         "load": 4.0,

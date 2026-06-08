@@ -133,6 +133,7 @@ def update_task(
 def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     task = _get_task_or_404(task_id, session)
     _set_resources(task_id, [], session)
+    session.flush()  # delete TaskResource rows before the task to satisfy FK constraint
     session.delete(task)
     session.commit()
 

@@ -1,7 +1,9 @@
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.models import Project, Resource, Task
+from sqlmodel import select
+
+from app.models import Project, Resource, Task, TaskResource
 from app.seed import seed_data
 
 
@@ -43,20 +45,24 @@ def test_seed_relationships_resolve():
         seed_data(session)
 
     with Session(engine) as session:
-        # Fetch a task with a resource
+        # Fetch a task with a resource assignment
         task = session.query(Task).filter(Task.title == "Design mockups").first()
         assert task is not None
         assert task.project is not None
-        assert task.resource is not None
         assert task.project.name == "Website Redesign"
-        assert task.resource.name == "Alice"
+        tr = session.exec(select(TaskResource).where(TaskResource.task_id == task.id)).first()
+        assert tr is not None
+        resource = session.get(Resource, tr.resource_id)
+        assert resource is not None
+        assert resource.name == "Alice"
 
         # Fetch a task without a resource (unassigned)
         unassigned_task = (
             session.query(Task).filter(Task.title == "Monitoring setup").first()
         )
         assert unassigned_task is not None
-        assert unassigned_task.resource is None
+        tr2 = session.exec(select(TaskResource).where(TaskResource.task_id == unassigned_task.id)).first()
+        assert tr2 is None
         assert unassigned_task.project.name == "Infrastructure"
 
 
