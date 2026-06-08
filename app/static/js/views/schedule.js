@@ -39,9 +39,9 @@ async function realignSchedule(resources, tasks, projects) {
   }
 
   if (!patchMap.size) return 0;
-  await Promise.all([...patchMap.entries()].map(([id, { start, end }]) =>
-    api.patch(`/tasks/${id}`, { start_date: start, end_date: end })
-  ));
+  for (const [id, { start, end }] of patchMap.entries()) {
+    await api.patch(`/tasks/${id}`, { start_date: start, end_date: end });
+  }
   return patchMap.size;
 }
 
