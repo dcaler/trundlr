@@ -56,6 +56,17 @@ let appSettings = { timezone: 'UTC' };
 
 window.addEventListener('hashchange', navigate);
 window.addEventListener('DOMContentLoaded', async () => {
+  // When a nav link is already the active hash, hashchange won't fire (the
+  // URL doesn't change). Intercept clicks so we always re-render in that case
+  // — e.g. navigating back to the Projects list from a project detail view.
+  document.querySelectorAll('.nav-links a').forEach(a => {
+    a.addEventListener('click', e => {
+      if (location.hash === a.getAttribute('href')) {
+        e.preventDefault();
+        navigate();
+      }
+    });
+  });
   try {
     const v = await api.get('/version');
     const el = document.getElementById('nav-version');
