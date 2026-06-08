@@ -1,6 +1,8 @@
 // ── Schedule view: Timeline (Gantt) + Utilization heatmap ────────────────
 
 const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
+const GANTT_LABEL_W    = 160; // must match .gantt-label-th/.gantt-label-td width in CSS
+const UTIL_DAY_W       = 28;  // must match .gantt-day-th / .util-cell width in CSS
 
 // ── Availability helpers ──────────────────────────────────────────────────
 
@@ -153,7 +155,8 @@ function buildHourlyHeader(dates, today) {
       // Label every 6 hours (00, 06, 12, 18); tick only otherwise
       const label = h % 6 === 0 ? String(h).padStart(2, '0') : '';
       const fsize = h % 6 === 0 ? '0.7rem' : '0';
-      return `<th class="gantt-day-th${cls}" style="width:${SCHED_HOUR_WIDTH}px;min-width:${SCHED_HOUR_WIDTH}px;font-size:${fsize};padding:1px 0;overflow:hidden">${label}</th>`;
+      // overflow:visible so "00"/"06" etc. aren't clipped by the narrow column
+      return `<th class="gantt-day-th${cls}" style="width:${SCHED_HOUR_WIDTH}px;min-width:${SCHED_HOUR_WIDTH}px;font-size:${fsize};padding:1px 0;overflow:visible">${label}</th>`;
     })
   ).join('');
 
@@ -229,15 +232,80 @@ function buildGanttBarsHtml(tasks, fromDate, toDate, priorityByProject = {}, pro
   return { html, trackHeight };
 }
 
-function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours, priorityByProject = {}, projectById = {}) {
+// Build a CSS linear-gradient encoding resource availability over the date range.
+// Unavailable hours get a grey tint; full-day blockouts get a red tint.
+// Returns a gradient string, or null if the resource is available during every hour shown.
+function buildAvailabilityGradient(resource, dates, windows, blockouts) {
+  const toH = t => { const [h, m] = t.split(':').map(Number); return h + m / 60; };
+  const px  = h => `${Math.round(h * SCHED_HOUR_WIDTH)}px`;
+  const totalHours = dates.length * 24;
+  const hasWindows = windows.length > 0;
+
+  // Per-hour status: 0 = available, 1 = unavailable, 2 = blocked out
+  const st = new Uint8Array(totalHours);
+
+  dates.forEach((dateStr, di) => {
+    const base = di * 24;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dow = (new Date(y, m - 1, d).getDay() + 6) % 7; // 0=Mon…6=Sun
+    const dayBlocks = blockouts.filter(b => dateStr >= b.start_date && dateStr <= b.end_date);
+
+    if (dayBlocks.some(b => b.from_time === null)) {
+      st.fill(2, base, base + 24);
+      return;
+    }
+
+    let avail = [];
+    if (hasWindows) {
+      avail = windows.filter(w => w.day_of_week === dow)
+        .map(w => [toH(w.from_time), toH(w.to_time)]);
+    } else if (resource.available_days & (1 << dow)) {
+      avail = [[toH(resource.available_from || '09:00'), toH(resource.available_to || '17:00')]];
+    }
+
+    for (let h = 0; h < 24; h++) {
+      if (!avail.some(([f, t]) => h >= f && h < t)) st[base + h] = 1;
+    }
+
+    dayBlocks.filter(b => b.from_time !== null).forEach(b => {
+      const f = toH(b.from_time), t = toH(b.to_time);
+      for (let h = Math.floor(f); h < Math.ceil(t) && h < 24; h++) st[base + h] = 2;
+    });
+  });
+
+  if (!st.some(v => v > 0)) return null;
+
+  const COLORS = [null, 'rgba(0,0,0,0.06)', 'rgba(220,53,69,0.15)'];
+  const stops = [];
+  let runSt = st[0], runStart = 0;
+
+  const flushRun = (from, to, s) => {
+    const color = COLORS[s] || 'transparent';
+    stops.push(`${color} ${px(from)}`);
+    stops.push(`${color} ${px(to)}`);
+  };
+
+  for (let h = 1; h <= totalHours; h++) {
+    const s = h < totalHours ? st[h] : -1;
+    if (s !== runSt) { flushRun(runStart, h, runSt); runSt = s; runStart = h; }
+  }
+
+  if (!stops.length) return null;
+  return `linear-gradient(90deg, ${stops.join(', ')})`;
+}
+
+function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours, priorityByProject = {}, projectById = {}, windows = [], blockouts = []) {
+  const dates    = schedGenerateDates(fromDate, toDate);
   const resTasks = tasks.filter(t => (t.resource_ids || []).includes(resource.id));
   const { html: bars, trackHeight } = buildGanttBarsHtml(resTasks, fromDate, toDate, priorityByProject, projectById);
-  const totalW = totalHours * SCHED_HOUR_WIDTH;
-  const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
+  const totalW    = totalHours * SCHED_HOUR_WIDTH;
+  const grid      = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
+  const availGrad = buildAvailabilityGradient(resource, dates, windows, blockouts);
+  const background = availGrad ? `${grid}, ${availGrad}` : grid;
   return `<tr>
     <td class="gantt-label-td">${escHtml(resource.name)}</td>
     <td class="gantt-track-td" colspan="${totalHours}">
-      <div class="gantt-track" style="width:${totalW}px;height:${trackHeight}px;background:${grid}">${bars}</div>
+      <div class="gantt-track" style="width:${totalW}px;height:${trackHeight}px;background:${background}">${bars}</div>
     </td>
   </tr>`;
 }
@@ -346,7 +414,7 @@ function buildUtilHtml(utilData, conflictsMap, dates, today) {
       <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Hover a cell for details</span>
     </div>
     <div class="gantt-scroll-wrapper">
-      <table class="gantt-table">
+      <table class="gantt-table" style="width:${GANTT_LABEL_W + dates.length * UTIL_DAY_W}px">
         <thead>${thead}</thead>
         <tbody>${tbody}</tbody>
       </table>
@@ -436,6 +504,18 @@ async function showSchedule(el) {
       return;
     }
 
+    // Fetch availability data for shading; fall back to empty if requests fail
+    let windowsByResource = {}, blockoutsByResource = {};
+    try {
+      const [wList, bList] = await Promise.all([
+        Promise.all(resources.map(r => api.get(`/resources/${r.id}/windows`))),
+        Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`))),
+      ]);
+      windowsByResource  = Object.fromEntries(resources.map((r, i) => [r.id, wList[i]]));
+      blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
+    } catch (_) {}
+    if (renderGen !== gen) return;
+
     const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
     const projectById       = Object.fromEntries(projects.map(p => [p.id, p]));
 
@@ -443,7 +523,10 @@ async function showSchedule(el) {
     const totalHours = dates.length * 24;
     const thead      = buildHourlyHeader(dates, today);
     const tbody = [
-      ...resources.map(r => buildGanttResourceRowHourly(r, tasks, from, to, totalHours, priorityByProject, projectById)),
+      ...resources.map(r => buildGanttResourceRowHourly(
+        r, tasks, from, to, totalHours, priorityByProject, projectById,
+        windowsByResource[r.id] || [], blockoutsByResource[r.id] || []
+      )),
       buildUnassignedRowHourly(tasks, from, to, totalHours, priorityByProject, projectById),
     ].join('');
 
@@ -453,13 +536,15 @@ async function showSchedule(el) {
         <span class="gantt-legend-item"><span class="gantt-swatch bar-in_progress"></span>In progress</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-blocked"></span>Blocked</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-done"></span>Done</span>
+        <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(0,0,0,0.06);border:1px solid #dee2e6"></span>Unavailable</span>
+        <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(220,53,69,0.15);border:1px solid #dee2e6"></span>Blockout</span>
         <span style="margin-left:auto;display:flex;align-items:center;gap:0.75rem">
           <button id="btn-realign" class="btn btn-ghost" style="font-size:0.75rem;padding:0.2rem 0.5rem">↺ Re-align</button>
           <span style="color:var(--text-muted);font-size:0.75rem">Today highlighted blue · hover bar for times</span>
         </span>
       </div>
       <div class="gantt-scroll-wrapper">
-        <table class="gantt-table">
+        <table class="gantt-table" style="width:${GANTT_LABEL_W + totalHours * SCHED_HOUR_WIDTH}px">
           <thead>${thead}</thead>
           <tbody>${tbody}</tbody>
         </table>
