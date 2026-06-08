@@ -6,28 +6,48 @@ const UTIL_DAY_W       = 28;  // must match .gantt-day-th / .util-cell width in 
 
 // ── Availability helpers ──────────────────────────────────────────────────
 
-// Advance cursorMs to the next moment inside resource.available_from/to/days.
-// If cursor is already inside a window, return it unchanged.
-function nextSlotInWindow(cursorMs, resource) {
-  const [fh, fm] = (resource.available_from || '00:00').split(':').map(Number);
-  const [th, tm] = (resource.available_to   || '23:59').split(':').map(Number);
-  const fromOffsetMs = (fh * 60 + fm) * 60000;
-  const toOffsetMs   = (th * 60 + tm) * 60000;
+// Advance cursorMs to the next moment inside resource.available_from/to/days,
+// skipping any blockout periods.  If cursor is already in a valid slot, returns it.
+function nextSlotInWindow(cursorMs, resource, blockouts = []) {
+  const timeToMs = t => { const [h, m] = t.split(':').map(Number); return (h * 60 + m) * 60000; };
+  const fmtDate  = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+  const fromMs = timeToMs(resource.available_from || '00:00');
+  const toMs   = timeToMs(resource.available_to   || '23:59');
+
   let probe = cursorMs;
-  for (let i = 0; i < 365; i++) {
-    const d   = new Date(probe);
-    const dow = (d.getDay() + 6) % 7; // 0=Mon … 6=Sun
-    const dayStart   = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const windowStart = dayStart + fromOffsetMs;
-    const windowEnd   = dayStart + toOffsetMs;
-    if ((resource.available_days & (1 << dow)) && probe >= windowStart && probe < windowEnd) {
-      return probe; // already inside a valid window
+  for (let i = 0; i < 730; i++) {
+    const d        = new Date(probe);
+    const dateStr  = fmtDate(d);
+    const dow      = (d.getDay() + 6) % 7; // 0=Mon … 6=Sun
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const nextDay  = dayStart + 86400000 + fromMs;
+
+    // Full-day blockout — skip entire day
+    if (blockouts.some(b => b.from_time === null && dateStr >= b.start_date && dateStr <= b.end_date)) {
+      probe = nextDay; continue;
     }
-    if ((resource.available_days & (1 << dow)) && probe < windowStart) {
-      return windowStart; // today is available, jump to window start
-    }
-    // Skip to next day's window start
-    probe = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() + fromOffsetMs;
+
+    // Not an available workday — skip to next day
+    if (!(resource.available_days & (1 << dow))) { probe = nextDay; continue; }
+
+    const winStart = dayStart + fromMs;
+    const winEnd   = dayStart + toMs;
+
+    if (probe < winStart) { probe = winStart; continue; } // before window — jump to start
+    if (probe >= winEnd)  { probe = nextDay;  continue; } // past window  — next day
+
+    // Inside window — skip over any partial blockout that covers probe
+    const partial = blockouts.find(b => {
+      if (b.from_time === null) return false;
+      if (dateStr < b.start_date || dateStr > b.end_date) return false;
+      const bs = dayStart + timeToMs(b.from_time);
+      const be = dayStart + timeToMs(b.to_time);
+      return probe >= bs && probe < be;
+    });
+    if (partial) { probe = dayStart + timeToMs(partial.to_time); continue; }
+
+    return probe;
   }
   return probe;
 }
@@ -37,6 +57,13 @@ function nextSlotInWindow(cursorMs, resource) {
 async function realignSchedule(resources, tasks, projects) {
   const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
   const patchMap = new Map();
+
+  // Fetch blockouts so realignment skips unavailable periods
+  let blockoutsByResource = {};
+  try {
+    const bList = await Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`)));
+    blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
+  } catch (_) {}
 
   for (const resource of resources) {
     const onResource = t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date;
@@ -74,8 +101,9 @@ async function realignSchedule(resources, tasks, projects) {
       return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
     };
 
+    const blockouts = blockoutsByResource[resource.id] || [];
     for (const task of movable) {
-      cursor = nextSlotInWindow(cursor, resource);
+      cursor = nextSlotInWindow(cursor, resource, blockouts);
       const origStart = new Date(task.start_date).getTime();
       const dur = new Date(task.end_date).getTime() - origStart;
       if (cursor !== origStart) {
@@ -275,7 +303,7 @@ function buildAvailabilityGradient(resource, dates, windows, blockouts) {
 
   if (!st.some(v => v > 0)) return null;
 
-  const COLORS = [null, 'rgba(0,0,0,0.06)', 'rgba(220,53,69,0.15)'];
+  const COLORS = [null, 'rgba(0,0,0,0.12)', 'rgba(220,53,69,0.22)'];
   const stops = [];
   let runSt = st[0], runStart = 0;
 
@@ -536,8 +564,8 @@ async function showSchedule(el) {
         <span class="gantt-legend-item"><span class="gantt-swatch bar-in_progress"></span>In progress</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-blocked"></span>Blocked</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-done"></span>Done</span>
-        <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(0,0,0,0.06);border:1px solid #dee2e6"></span>Unavailable</span>
-        <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(220,53,69,0.15);border:1px solid #dee2e6"></span>Blockout</span>
+        <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(0,0,0,0.12);border:1px solid #dee2e6"></span>Unavailable</span>
+        <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(220,53,69,0.22);border:1px solid #dee2e6"></span>Blockout</span>
         <span style="margin-left:auto;display:flex;align-items:center;gap:0.75rem">
           <button id="btn-realign" class="btn btn-ghost" style="font-size:0.75rem;padding:0.2rem 0.5rem">↺ Re-align</button>
           <span style="color:var(--text-muted);font-size:0.75rem">Today highlighted blue · hover bar for times</span>
