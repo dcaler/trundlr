@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+ARG GIT_COMMIT=dev
+ENV GIT_COMMIT=${GIT_COMMIT}
+
 WORKDIR /app
 
 # Copy requirements and install dependencies
