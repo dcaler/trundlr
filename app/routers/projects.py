@@ -82,7 +82,6 @@ def copy_project(project_id: int = DBId(), session: Session = Depends(get_db)):
             status=task.status,
             start_date=task.start_date,
             end_date=task.end_date,
-            load=task.load,
             project_id=new_project.id,
         )
         session.add(new_task)

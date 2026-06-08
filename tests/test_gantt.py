@@ -134,7 +134,6 @@ def test_schedule_endpoint_matches_seeded_task(api_client):
         "resource_ids": [resource["id"]],
         "start_date": "2026-06-03",
         "end_date": "2026-06-05",
-        "load": 4.0,
     })
 
     resp = api_client.get(
@@ -148,10 +147,10 @@ def test_schedule_endpoint_matches_seeded_task(api_client):
     assert days["2026-06-01"]["committed"] == pytest.approx(0.0)
     assert days["2026-06-02"]["committed"] == pytest.approx(0.0)
 
-    # Days inside the task window → 4.0 committed, bar present
-    assert days["2026-06-03"]["committed"] == pytest.approx(4.0)
-    assert days["2026-06-04"]["committed"] == pytest.approx(4.0)
-    assert days["2026-06-05"]["committed"] == pytest.approx(4.0)
+    # Days inside the task window → 1 task committed, bar present
+    assert days["2026-06-03"]["committed"] == pytest.approx(1.0)
+    assert days["2026-06-04"]["committed"] == pytest.approx(1.0)
+    assert days["2026-06-05"]["committed"] == pytest.approx(1.0)
 
     # Also assert pixel positions are correct for this seed
     range_start = date(2026, 6, 1)

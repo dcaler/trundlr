@@ -57,28 +57,14 @@ function setupAutoCalcEnd(form) {
 }
 
 // When resources are selected in a task form, fill start_date from the first resource's next slot.
-// resourceById: map of id → resource object (used to auto-set load for cpu/gpu resources).
 function setupResourceAutoStart(form, resourceById = {}) {
   const startDateEl = form.querySelector('[name="start_date"]');
   const startTimeEl = form.querySelector('[name="start_time"]');
-  const loadEl      = form.querySelector('[name="load"]');
   if (!startDateEl) return;
 
   async function refreshStart() {
     const checked = [...form.querySelectorAll('[name="resource_ids"]:checked')];
     if (!checked.length) return;
-
-    // For cpu/gpu resources the runner runs one task at a time, so each task should
-    // occupy the full resource (load = capacity). This prevents the scheduler from
-    // stacking multiple tasks into the same time slot.
-    if (loadEl) {
-      const computeRes = checked
-        .map(cb => resourceById[parseInt(cb.value)])
-        .filter(r => r && (r.kind === 'cpu' || r.kind === 'gpu') && r.capacity != null);
-      if (computeRes.length > 0) {
-        loadEl.value = computeRes[0].capacity;
-      }
-    }
 
     // Start no earlier than now; also no earlier than the last task on each checked resource.
     let bestMs = Date.now();
@@ -312,7 +298,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
                 <input type="text" name="end_time" value="${dtTime(t.end_date)}" placeholder="HH:MM" maxlength="5" readonly style="width:65px">
               </span>
             </div>
-            <div><label>Load</label><input type="number" name="load" value="${t.load}" min="0.01" step="any" style="width:70px"></div>
             <div><label>Duration (h)</label><input type="number" name="duration" value="${t.duration != null ? t.duration : ''}" min="0.01" step="any" style="width:70px" placeholder="—"></div>
             <div><label>Status</label><select name="status">${statusOptions(t.status)}</select></div>
             ${t.exit_code != null ? `<div><label>Exit code</label><input value="${escHtml(String(t.exit_code))}" readonly style="width:70px"></div>` : ''}
@@ -341,7 +326,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       <td style="color:var(--text-muted);font-size:0.8rem">${t.depends_on_id && taskById[t.depends_on_id] ? '↳ ' + escHtml(taskById[t.depends_on_id].title) : '—'}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
-      <td>${t.load}</td>
       <td>${t.duration != null ? t.duration + 'h' : '—'}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn btn-ghost edit-task-btn" data-id="${t.id}" title="Edit">✎</button>
@@ -378,7 +362,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
           <input type="text" name="end_time" placeholder="HH:MM" maxlength="5" readonly style="width:65px">
         </span>
       </div>
-      <div><label>Load</label><input type="number" name="load" value="1" min="0.01" step="any" style="width:70px"></div>
       <div><label>Duration (h)</label><input type="number" name="duration" min="0.01" step="any" style="width:70px" placeholder="—"></div>
       <div><label>Status</label><select name="status">${statusOptions('todo')}</select></div>
       <div style="align-self:flex-end"><button type="submit" class="btn btn-primary">Add task</button></div>
@@ -390,7 +373,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       : `<table>
           <thead><tr>
             <th>Title</th><th>Status</th><th>Resource</th><th>Depends on</th>
-            <th>Start</th><th>End</th><th>Load</th><th>Duration</th><th style="width:100px"></th>
+            <th>Start</th><th>End</th><th>Duration</th><th style="width:100px"></th>
           </tr></thead>
           <tbody>${taskRows}</tbody>
         </table>`}
@@ -420,7 +403,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
         depends_on_id: depRaw ? parseInt(depRaw) : null,
         start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,
         end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
-        load: parseFloat(fd.get('load')),
         duration: durRaw ? parseFloat(durRaw) : null,
         status: fd.get('status'),
       });
@@ -451,7 +433,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
           depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
           start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,
           end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
-          load: parseFloat(fd.get('load')),
           duration: durRaw ? parseFloat(durRaw) : null,
           status: fd.get('status'),
         });

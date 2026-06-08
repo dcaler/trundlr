@@ -40,12 +40,9 @@ def client():
 def create_project(client, name="Alpha", description=None):
     return client.post("/api/projects/", json={"name": name, "description": description}).json()
 
-def create_resource(client, name="Alice", kind="human", capacity=None):
-    if kind == "human":
-        body = {"name": name, "kind": kind,
-                "available_from": "09:00", "available_to": "17:00", "available_days": 31}
-    else:
-        body = {"name": name, "kind": kind, "capacity": capacity}
+def create_resource(client, name="Alice", kind="human"):
+    body = {"name": name, "kind": kind,
+            "available_from": "09:00", "available_to": "17:00", "available_days": 31}
     return client.post("/api/resources/", json=body).json()
 
 def create_task(client, project_id, title="Task 1", **kwargs):
@@ -99,21 +96,19 @@ def test_assign_resource_to_task(client):
     assert r["id"] in fetched["resource_ids"]
 
 
-def test_assign_with_dates_and_load(client):
+def test_assign_with_dates(client):
     p = create_project(client)
-    r = create_resource(client, "GPU Node", "gpu", 4.0)
+    r = create_resource(client, "GPU Node", "gpu")
     t = create_task(
         client, p["id"],
         title="Training run",
         resource_ids=[r["id"]],
         start_date="2026-06-01",
         end_date="2026-06-07",
-        load=2.0,
     )
     assert r["id"] in t["resource_ids"]
     assert t["start_date"].startswith("2026-06-01")
     assert t["end_date"].startswith("2026-06-07")
-    assert t["load"] == pytest.approx(2.0)
 
 
 def test_status_change_persists(client):
@@ -179,7 +174,6 @@ def test_full_flow(client):
         resource_ids=[resource["id"]],
         start_date="2026-07-01",
         end_date="2026-07-05",
-        load=4.0,
         status="in_progress",
     )
 
@@ -187,7 +181,6 @@ def test_full_flow(client):
     assert task["project_id"] == project["id"]
     assert resource["id"] in task["resource_ids"]
     assert task["start_date"].startswith("2026-07-01")
-    assert task["load"] == pytest.approx(4.0)
     assert task["status"] == "in_progress"
 
     # Task appears in project task list

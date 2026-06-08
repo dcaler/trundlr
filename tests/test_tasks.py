@@ -61,7 +61,6 @@ def test_create_task_minimal(client, project_id):
     assert body["title"] == "Write tests"
     assert body["project_id"] == project_id
     assert body["status"] == "todo"
-    assert body["load"] == 1.0
     assert body["resource_ids"] == []
 
 
@@ -74,7 +73,6 @@ def test_create_task_with_resource_and_dates(client, project_id, resource_id):
             "resource_ids": [resource_id],
             "start_date": "2026-06-01",
             "end_date": "2026-06-30",
-            "load": 6.0,
             "status": "in_progress",
         },
     )
@@ -83,7 +81,6 @@ def test_create_task_with_resource_and_dates(client, project_id, resource_id):
     assert resource_id in body["resource_ids"]
     assert body["start_date"].startswith("2026-06-01")
     assert body["end_date"].startswith("2026-06-30")
-    assert body["load"] == 6.0
     assert body["status"] == "in_progress"
 
 
@@ -243,6 +240,3 @@ def test_create_missing_title(client, project_id):
     assert client.post("/api/tasks/", json={"project_id": project_id}).status_code == 422
 
 
-def test_create_zero_load(client, project_id):
-    resp = client.post("/api/tasks/", json={"title": "T", "project_id": project_id, "load": 0.0})
-    assert resp.status_code == 422

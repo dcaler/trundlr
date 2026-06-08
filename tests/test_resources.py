@@ -8,6 +8,8 @@ from app.database import get_db
 from app.main import app
 
 HUMAN = {"name": "Alice", "kind": "human", "available_from": "09:00", "available_to": "17:00", "available_days": 31}
+CPU   = {"name": "CPU Node", "kind": "cpu", "available_from": "00:00", "available_to": "23:59", "available_days": 127}
+GPU   = {"name": "GPU Node", "kind": "gpu", "available_from": "00:00", "available_to": "23:59", "available_days": 127}
 
 
 @pytest.fixture(name="session")
@@ -47,7 +49,6 @@ def test_create_human_resource(client):
     body = resp.json()
     assert body["name"] == "Alice"
     assert body["kind"] == "human"
-    assert body["capacity"] is None
     assert body["available_from"] == "09:00"
     assert body["available_to"] == "17:00"
     assert body["available_days"] == 31
@@ -55,25 +56,21 @@ def test_create_human_resource(client):
 
 
 def test_create_cpu_resource(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "CPU Node", "kind": "cpu", "capacity": 4.0}
-    )
+    resp = client.post("/api/resources/", json=CPU)
     assert resp.status_code == 201
     assert resp.json()["kind"] == "cpu"
-    assert resp.json()["capacity"] == 4.0
+    assert resp.json()["available_days"] == 127
 
 
 def test_create_gpu_resource(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "GPU Node", "kind": "gpu", "capacity": 2.0}
-    )
+    resp = client.post("/api/resources/", json=GPU)
     assert resp.status_code == 201
     assert resp.json()["kind"] == "gpu"
 
 
 def test_list_resources(client):
     client.post("/api/resources/", json={**HUMAN, "name": "R1"})
-    client.post("/api/resources/", json={"name": "R2", "kind": "cpu", "capacity": 4.0})
+    client.post("/api/resources/", json={**CPU, "name": "R2"})
     resp = client.get("/api/resources/")
     assert resp.status_code == 200
     names = [r["name"] for r in resp.json()]
@@ -96,14 +93,12 @@ def test_patch_resource_name(client):
     assert resp.json()["available_from"] == "09:00"
 
 
-def test_patch_resource_capacity(client):
-    created = client.post(
-        "/api/resources/", json={"name": "GPU1", "kind": "gpu", "capacity": 2.0}
-    ).json()
-    resp = client.patch(f"/api/resources/{created['id']}", json={"capacity": 4.0})
+def test_patch_resource_availability(client):
+    created = client.post("/api/resources/", json=GPU).json()
+    resp = client.patch(f"/api/resources/{created['id']}", json={"available_to": "22:00"})
     assert resp.status_code == 200
-    assert resp.json()["capacity"] == 4.0
-    assert resp.json()["name"] == "GPU1"
+    assert resp.json()["available_to"] == "22:00"
+    assert resp.json()["name"] == "GPU Node"
 
 
 def test_patch_human_availability(client):
@@ -114,9 +109,7 @@ def test_patch_human_availability(client):
 
 
 def test_delete_resource(client):
-    created = client.post(
-        "/api/resources/", json={"name": "Temp", "kind": "cpu", "capacity": 1.0}
-    ).json()
+    created = client.post("/api/resources/", json=CPU).json()
     assert client.delete(f"/api/resources/{created['id']}").status_code == 204
     assert client.get(f"/api/resources/{created['id']}").status_code == 404
 
@@ -152,55 +145,13 @@ def test_delete_missing_resource(client):
 # --- invalid kind ---
 
 def test_create_invalid_kind(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "X", "kind": "robot", "capacity": 1.0}
-    )
+    resp = client.post("/api/resources/", json={"name": "X", "kind": "robot"})
     assert resp.status_code == 422
 
 
-# --- human with capacity rejected ---
+# --- availability validation ---
 
-def test_create_human_with_capacity_rejected(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "X", "kind": "human", "capacity": 8.0}
-    )
-    assert resp.status_code == 422
-
-
-# --- capacity <= 0 for compute resources ---
-
-def test_create_zero_capacity(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "X", "kind": "cpu", "capacity": 0.0}
-    )
-    assert resp.status_code == 422
-
-
-def test_create_negative_capacity(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "X", "kind": "cpu", "capacity": -1.0}
-    )
-    assert resp.status_code == 422
-
-
-def test_patch_zero_capacity(client):
-    created = client.post(
-        "/api/resources/", json={"name": "Y", "kind": "cpu", "capacity": 4.0}
-    ).json()
-    resp = client.patch(f"/api/resources/{created['id']}", json={"capacity": 0.0})
-    assert resp.status_code == 422
-
-
-# --- human missing availability fields ---
-
-def test_create_human_missing_availability(client):
-    resp = client.post(
-        "/api/resources/", json={"name": "X", "kind": "human"}
-    )
-    assert resp.status_code == 422
-
-
-def test_create_human_invalid_time_format(client):
+def test_create_invalid_time_format(client):
     resp = client.post(
         "/api/resources/",
         json={"name": "X", "kind": "human", "available_from": "9am",
@@ -209,7 +160,7 @@ def test_create_human_invalid_time_format(client):
     assert resp.status_code == 422
 
 
-def test_create_human_end_before_start(client):
+def test_create_end_before_start(client):
     resp = client.post(
         "/api/resources/",
         json={"name": "X", "kind": "human", "available_from": "17:00",
@@ -218,6 +169,25 @@ def test_create_human_end_before_start(client):
     assert resp.status_code == 422
 
 
+def test_create_invalid_available_days(client):
+    resp = client.post(
+        "/api/resources/",
+        json={"name": "X", "kind": "gpu", "available_from": "09:00",
+              "available_to": "17:00", "available_days": 0},
+    )
+    assert resp.status_code == 422
+
+
 def test_create_missing_required_fields(client):
     assert client.post("/api/resources/", json={"name": "X"}).status_code == 422
     assert client.post("/api/resources/", json={"kind": "human"}).status_code == 422
+
+
+def test_create_defaults_applied(client):
+    # All kinds have defaults; just name+kind is enough.
+    resp = client.post("/api/resources/", json={"name": "Bare", "kind": "cpu"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["available_from"] == "09:00"
+    assert body["available_to"] == "17:00"
+    assert body["available_days"] == 31
