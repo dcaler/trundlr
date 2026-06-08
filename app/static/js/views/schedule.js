@@ -145,8 +145,12 @@ async function realignSchedule(resources, tasks, projects) {
       if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
 
       cursor = nextSlotInWindow(cursor, resource, blockouts);
-      const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
-      if (cursor + dur > wE && cursor > wS) cursor = nextSlotInWindow(wE, resource, blockouts);
+      // Fit-to-window only makes sense for resources with bounded working hours
+      // (human/ai).  CPU/GPU run 24/7 — pushing to midnight creates false gaps.
+      if (resource.kind === 'human' || resource.kind === 'ai') {
+        const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
+        if (cursor + dur > wE && cursor > wS) cursor = nextSlotInWindow(wE, resource, blockouts);
+      }
 
       patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
       cursor += dur;
