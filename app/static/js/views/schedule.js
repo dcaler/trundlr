@@ -94,7 +94,7 @@ async function realignSchedule(resources, tasks, projects) {
   } catch (_) {}
 
   for (const resource of resources) {
-    const onResource = t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date;
+    const onResource = t => (t.resource_ids || []).includes(resource.id);
     const blockouts  = blockoutsByResource[resource.id] || [];
 
     // Only todo tasks are moved; already-claimed tasks (from earlier resource iterations) are skipped
@@ -108,11 +108,12 @@ async function realignSchedule(resources, tasks, projects) {
 
     if (!movable.length) continue;
 
-    // Cursor floor: after the last non-todo task (blocked/in_progress/done/failed stay put)
+    // Cursor floor: after the last in-flight task (in_progress/done/failed only —
+    // blocked tasks are ignored and don't occupy queue space)
     // and after any task already claimed by an earlier resource iteration on this resource
     const fixedEnd   = tasks
-      .filter(t => onResource(t) && t.status !== 'todo')
-      .reduce((mx, t) => Math.max(mx, new Date(t.end_date || t.start_date).getTime()), 0);
+      .filter(t => onResource(t) && t.end_date && !['todo', 'blocked'].includes(t.status))
+      .reduce((mx, t) => Math.max(mx, new Date(t.end_date).getTime()), 0);
     const claimedEnd = tasks
       .filter(t => onResource(t) && patchMap.has(t.id))
       .reduce((mx, t) => Math.max(mx, new Date(patchMap.get(t.id).end).getTime()), 0);
@@ -120,7 +121,10 @@ async function realignSchedule(resources, tasks, projects) {
     let cursor = Math.max(fixedEnd, claimedEnd, Date.now());
 
     for (const task of movable) {
-      const dur = new Date(task.end_date).getTime() - new Date(task.start_date).getTime();
+      // Fall back to task.duration (hours) when no dates have been set yet
+      const dur = task.start_date && task.end_date
+        ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
+        : (task.duration || 1) * 3600000;
 
       // Respect depends_on: never start before the dependency finishes
       if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
