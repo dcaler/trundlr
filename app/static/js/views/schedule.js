@@ -56,9 +56,37 @@ function nextSlotInWindow(cursorMs, resource, blockouts = []) {
 
 async function realignSchedule(resources, tasks, projects) {
   const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
-  const patchMap = new Map();
 
-  // Fetch blockouts so realignment skips unavailable periods
+  // patchMap records ALL claimed tasks (changed or not) so shared tasks aren't
+  // double-scheduled when processed by a second resource.
+  const patchMap = new Map(); // id → {start, end}
+
+  const fmt = ms => {
+    const d = new Date(ms);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+  };
+
+  // Resolve the end of a task using already-computed times where available
+  const resolvedEnd = id => {
+    if (patchMap.has(id)) return new Date(patchMap.get(id).end).getTime();
+    const t = tasks.find(t => t.id === id);
+    return t ? new Date(t.end_date || t.start_date || 0).getTime() : 0;
+  };
+
+  // Window boundary helpers (simple available_from/to model)
+  const winStart = (ms, r) => {
+    const [h, m] = (r.available_from || '00:00').split(':').map(Number);
+    const d = new Date(ms);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
+  };
+  const winEnd = (ms, r) => {
+    const [h, m] = (r.available_to || '23:59').split(':').map(Number);
+    const d = new Date(ms);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
+  };
+
+  // Fetch blockouts
   let blockoutsByResource = {};
   try {
     const bList = await Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`)));
@@ -67,57 +95,63 @@ async function realignSchedule(resources, tasks, projects) {
 
   for (const resource of resources) {
     const onResource = t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date;
+    const blockouts  = blockoutsByResource[resource.id] || [];
 
-    // Tasks we will move: todo/blocked only, not already claimed by another resource loop
+    // Only todo tasks are moved; already-claimed tasks (from earlier resource iterations) are skipped
     const movable = tasks
-      .filter(t => onResource(t) && (t.status === 'todo' || t.status === 'blocked') && !patchMap.has(t.id))
+      .filter(t => onResource(t) && t.status === 'todo' && !patchMap.has(t.id))
       .sort((a, b) => {
         const pa = priorityByProject[a.project_id] || 3;
         const pb = priorityByProject[b.project_id] || 3;
-        if (pa !== pb) return pa - pb;
-        return new Date(a.start_date) - new Date(b.start_date);
+        return pa !== pb ? pa - pb : a.id - b.id; // stable tiebreaker → idempotent
       });
 
     if (!movable.length) continue;
 
-    // Start cursor after any task already occupying this resource (in_progress / done / failed)
-    // so we never schedule a movable task on top of an active one.
-    const fixedEnd = tasks
-      .filter(t => onResource(t) && t.status !== 'todo' && t.status !== 'blocked')
+    // Cursor floor: after the last non-todo task (blocked/in_progress/done/failed stay put)
+    // and after any task already claimed by an earlier resource iteration on this resource
+    const fixedEnd   = tasks
+      .filter(t => onResource(t) && t.status !== 'todo')
       .reduce((mx, t) => Math.max(mx, new Date(t.end_date || t.start_date).getTime()), 0);
-
-    // Also account for tasks already re-scheduled by earlier resource iterations
-    // that are assigned to this resource too — without this, two resources that
-    // share a task would get tasks scheduled concurrently on the shared resource.
-    const patchedEnd = tasks
+    const claimedEnd = tasks
       .filter(t => onResource(t) && patchMap.has(t.id))
       .reduce((mx, t) => Math.max(mx, new Date(patchMap.get(t.id).end).getTime()), 0);
 
-    let cursor = Math.max(fixedEnd, patchedEnd, Date.now());
+    let cursor = Math.max(fixedEnd, claimedEnd, Date.now());
 
-    const fmt = ms => {
-      const d = new Date(ms);
-      const p = n => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
-    };
-
-    const blockouts = blockoutsByResource[resource.id] || [];
     for (const task of movable) {
+      const dur = new Date(task.end_date).getTime() - new Date(task.start_date).getTime();
+
+      // Respect depends_on: never start before the dependency finishes
+      if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
+
+      // Advance to the next valid moment (respects window + blockouts)
       cursor = nextSlotInWindow(cursor, resource, blockouts);
-      const origStart = new Date(task.start_date).getTime();
-      const dur = new Date(task.end_date).getTime() - origStart;
-      if (cursor !== origStart) {
-        patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
+
+      // Fit-to-window: if the task won't fit in the remaining window and we're
+      // mid-window, skip to the next window start so more of the task falls within
+      // availability rather than straddling the boundary from an arbitrary mid-point
+      const wEnd   = winEnd(cursor, resource);
+      const wStart = winStart(cursor, resource);
+      if (cursor + dur > wEnd && cursor > wStart) {
+        cursor = nextSlotInWindow(wEnd, resource, blockouts);
       }
+
+      patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
       cursor += dur;
     }
   }
 
-  if (!patchMap.size) return 0;
+  // PATCH only tasks whose time actually changed; return the count of changes
+  let changed = 0;
   for (const [id, { start, end }] of patchMap.entries()) {
-    await api.patch(`/tasks/${id}`, { start_date: start, end_date: end });
+    const task = tasks.find(t => t.id === id);
+    if (!task || start !== task.start_date) {
+      await api.patch(`/tasks/${id}`, { start_date: start, end_date: end });
+      changed++;
+    }
   }
-  return patchMap.size;
+  return changed;
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────
