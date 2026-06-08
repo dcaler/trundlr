@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-_GIT_COMMIT = os.environ.get("GIT_COMMIT", "dev")
+_VERSION_FILE = Path(__file__).parent.parent / "VERSION"
+_APP_VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "dev"
 _STARTED_AT = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
 from fastapi import FastAPI, Request
@@ -73,7 +74,7 @@ def health():
 
 @app.get("/api/version")
 def version():
-    return {"version": f"{_GIT_COMMIT} · {_STARTED_AT}"}
+    return {"version": f"{_APP_VERSION} · {_STARTED_AT}"}
 
 
 app.include_router(projects.router)
