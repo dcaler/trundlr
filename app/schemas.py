@@ -133,6 +133,7 @@ class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     exit_code: Optional[int] = None
     log_tail: Optional[str] = None
+    pinned: Optional[bool] = None
 
     @model_validator(mode="after")
     def end_after_start(self) -> "TaskUpdate":
@@ -154,6 +155,7 @@ class TaskRead(BaseModel):
     project_id: int
     resource_ids: list[int] = []
     depends_on_id: Optional[int] = None
+    pinned: bool = False
 
     model_config = {"from_attributes": True}
 

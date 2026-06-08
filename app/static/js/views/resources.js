@@ -221,8 +221,9 @@ async function showResourceDetail(el, resourceId, showCompleted = false) {
     const depHtml = dep
       ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
       : (t.depends_on_id ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">↳ #${t.depends_on_id}</div>` : '');
+    const pinnedHtml = t.pinned ? ' <span title="Pinned — re-align will not move this task" style="font-size:0.75rem;opacity:0.7">📌</span>' : '';
     return `<tr>
-      <td>${escHtml(t.title)}${depHtml}${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escHtml(t.description)}</div>` : ''}</td>
+      <td>${escHtml(t.title)}${pinnedHtml}${depHtml}${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escHtml(t.description)}</div>` : ''}</td>
       <td>${escHtml(project.name || '—')}</td>
       <td>${statusBadge(t.status)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>

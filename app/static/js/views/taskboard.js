@@ -43,6 +43,10 @@ async function showTaskBoard(el, showCompleted = false) {
       ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
       : '';
 
+    const pinnedBtn = t.status === 'todo'
+      ? `<button class="pin-btn btn btn-ghost" data-id="${t.id}" data-pinned="${t.pinned ? '1' : '0'}" title="${t.pinned ? 'Unpin (re-align will reschedule)' : 'Pin (preserve timing through re-align)'}" style="padding:0.1em 0.35em;font-size:0.9em;opacity:${t.pinned ? '1' : '0.35'}">${t.pinned ? '📌' : '📌'}</button>`
+      : '';
+
     return `<tr style="${rowStyle}" data-id="${t.id}">
       <td>
         <select class="status-sel badge badge-${escHtml(t.status)}" data-id="${t.id}" style="cursor:pointer;border:none;background:transparent;font-size:0.8em;font-weight:600;padding:0.15em 0.3em;border-radius:3px">
@@ -55,6 +59,7 @@ async function showTaskBoard(el, showCompleted = false) {
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.end_date)}</td>
       <td style="font-size:0.85em">${t.duration != null ? t.duration + 'h' : '—'}</td>
+      <td style="text-align:center">${pinnedBtn}</td>
     </tr>`;
   }).join('');
 
@@ -81,6 +86,7 @@ async function showTaskBoard(el, showCompleted = false) {
             <th>Start</th>
             <th>End</th>
             <th>Duration</th>
+            <th style="width:40px"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`}
@@ -94,6 +100,16 @@ async function showTaskBoard(el, showCompleted = false) {
     sel.addEventListener('change', async () => {
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, { status: sel.value });
+        await showTaskBoard(el, showCompleted);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    });
+  });
+
+  el.querySelectorAll('.pin-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        const nowPinned = btn.dataset.pinned === '1';
+        await api.patch(`/tasks/${btn.dataset.id}`, { pinned: !nowPinned });
         await showTaskBoard(el, showCompleted);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
