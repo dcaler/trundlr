@@ -117,24 +117,36 @@ async function realignSchedule(resources, tasks, projects) {
 
     console.log(`[realign] ${resource.name}: fixedEnd=${fixedEnd ? new Date(fixedEnd).toISOString() : 'none'} (${fixedTasks.length} fixed), cursor=${new Date(cursor).toISOString()}, movable=[${movable.map(t => `#${t.id}`).join(',')}]`);
 
-    for (const task of movable) {
-      // Fall back to task.duration (hours) when no dates have been set yet
+    // Greedy scheduler: at each cursor position pick the highest-priority task
+    // whose dependency is already satisfied.  When nothing is ready, jump the
+    // cursor to the earliest dep-resolution point so lower-priority free tasks
+    // can backfill gaps left by constrained high-priority tasks.
+    const remaining = [...movable];
+    for (let guard = 0; remaining.length && guard < 1000; guard++) {
+      const idx = remaining.findIndex(t =>
+        !t.depends_on_id || resolvedEnd(t.depends_on_id) <= cursor
+      );
+
+      if (idx === -1) {
+        // Nothing ready yet — jump to earliest dependency resolution
+        const nextMs = Math.min(...remaining
+          .filter(t => t.depends_on_id)
+          .map(t => resolvedEnd(t.depends_on_id)));
+        if (!isFinite(nextMs) || nextMs <= cursor) break;
+        cursor = nextMs;
+        continue;
+      }
+
+      const task = remaining.splice(idx, 1)[0];
       const dur = task.start_date && task.end_date
         ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
         : (task.duration || 1) * 3600000;
 
-      // Respect depends_on: never start before the dependency finishes
       if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
 
-      // Advance to the next valid moment (respects window + blockouts)
       cursor = nextSlotInWindow(cursor, resource, blockouts);
-
-      // Fit-to-window: if mid-window and task doesn't fit remaining time,
-      // skip to next window start so the task aligns with availability
       const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
-      if (cursor + dur > wE && cursor > wS) {
-        cursor = nextSlotInWindow(wE, resource, blockouts);
-      }
+      if (cursor + dur > wE && cursor > wS) cursor = nextSlotInWindow(wE, resource, blockouts);
 
       patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
       cursor += dur;
