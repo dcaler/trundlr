@@ -10,7 +10,8 @@ async function realignSchedule(resources, tasks, projects) {
 
   for (const resource of resources) {
     const resTasks = tasks
-      .filter(t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date && !patchMap.has(t.id))
+      .filter(t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date
+               && (t.status === 'todo' || t.status === 'blocked') && !patchMap.has(t.id))
       .sort((a, b) => {
         const pa = priorityByProject[a.project_id] || 3;
         const pb = priorityByProject[b.project_id] || 3;
@@ -20,7 +21,10 @@ async function realignSchedule(resources, tasks, projects) {
 
     if (!resTasks.length) continue;
 
-    const anchor = Math.min(...resTasks.map(t => new Date(t.start_date).getTime()));
+    const anchor = Math.max(
+      Math.min(...resTasks.map(t => new Date(t.start_date).getTime())),
+      Date.now()
+    );
     let cursor = anchor;
 
     for (const task of resTasks) {
