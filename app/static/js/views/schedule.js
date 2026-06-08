@@ -108,18 +108,34 @@ async function realignSchedule(resources, tasks, projects) {
 
     if (!movable.length) continue;
 
-    // Cursor floor: after the last in-flight task (in_progress/done/failed only —
-    // blocked tasks are ignored and don't occupy queue space)
-    // and after any task already claimed by an earlier resource iteration on this resource
-    const fixedTasks   = tasks.filter(t => onResource(t) && t.end_date && !['todo', 'blocked'].includes(t.status));
-    const fixedEnd     = fixedTasks.reduce((mx, t) => Math.max(mx, new Date(t.end_date).getTime()), 0);
-    const claimedEnd   = tasks
+    // Cursor floor: after the last in-flight task (in_progress/done/failed only;
+    // blocked tasks are ignored and don't occupy queue space).
+    const fixedTasks = tasks.filter(t => onResource(t) && t.end_date && !['todo', 'blocked'].includes(t.status));
+    const fixedEnd   = fixedTasks.reduce((mx, t) => Math.max(mx, new Date(t.end_date).getTime()), 0);
+
+    // Slots already occupied by shared tasks scheduled by an earlier resource iteration.
+    // Used to skip around them rather than block behind the last one.
+    const claimedSlots = tasks
       .filter(t => onResource(t) && patchMap.has(t.id))
-      .reduce((mx, t) => Math.max(mx, new Date(patchMap.get(t.id).end).getTime()), 0);
+      .map(t => ({ start: new Date(patchMap.get(t.id).start).getTime(), end: new Date(patchMap.get(t.id).end).getTime() }));
 
-    let cursor = Math.max(fixedEnd, claimedEnd, Date.now());
+    let cursor = Math.max(fixedEnd, Date.now());
 
-    console.log(`[realign] ${resource.name}: fixedEnd=${fixedEnd ? new Date(fixedEnd).toISOString() : 'none'} (from ${fixedTasks.length} fixed tasks: ${fixedTasks.map(t => `#${t.id}[${t.status}]end=${t.end_date}`).join(', ') || 'none'}), claimedEnd=${claimedEnd ? new Date(claimedEnd).toISOString() : 'none'}, cursor=${new Date(cursor).toISOString()}, movable=[${movable.map(t => `#${t.id}`).join(',')}]`);
+    console.log(`[realign] ${resource.name}: fixedEnd=${fixedEnd ? new Date(fixedEnd).toISOString() : 'none'} (${fixedTasks.length} fixed), claimedSlots=${claimedSlots.length}, cursor=${new Date(cursor).toISOString()}, movable=[${movable.map(t => `#${t.id}`).join(',')}]`);
+
+    // Find the next slot where [c, c+dur] fits within availability and doesn't
+    // overlap any claimed slot. Each check may advance cursor, so we loop.
+    const findSlot = (c, dur) => {
+      for (let guard = 0; guard < 500; guard++) {
+        c = nextSlotInWindow(c, resource, blockouts);
+        const wE = winEnd(c, resource), wS = winStart(c, resource);
+        if (c + dur > wE && c > wS) { c = wE; continue; }
+        const overlap = claimedSlots.find(s => c < s.end && c + dur > s.start);
+        if (overlap) { c = overlap.end; continue; }
+        return c;
+      }
+      return c;
+    };
 
     for (const task of movable) {
       // Fall back to task.duration (hours) when no dates have been set yet
@@ -130,17 +146,7 @@ async function realignSchedule(resources, tasks, projects) {
       // Respect depends_on: never start before the dependency finishes
       if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
 
-      // Advance to the next valid moment (respects window + blockouts)
-      cursor = nextSlotInWindow(cursor, resource, blockouts);
-
-      // Fit-to-window: if the task won't fit in the remaining window and we're
-      // mid-window, skip to the next window start so more of the task falls within
-      // availability rather than straddling the boundary from an arbitrary mid-point
-      const wEnd   = winEnd(cursor, resource);
-      const wStart = winStart(cursor, resource);
-      if (cursor + dur > wEnd && cursor > wStart) {
-        cursor = nextSlotInWindow(wEnd, resource, blockouts);
-      }
+      cursor = findSlot(cursor, dur);
 
       patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
       cursor += dur;
