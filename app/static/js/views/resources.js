@@ -188,25 +188,41 @@ function renderBlockoutsSection(blockouts) {
 
 async function showResourceDetail(el, resourceId, showCompleted = false) {
   el.innerHTML = '<p class="loading">Loading…</p>';
-  const [resource, tasks, projects, windows, blockouts] = await Promise.all([
+  const [resource, tasks, allTasks, projects, windows, blockouts] = await Promise.all([
     api.get(`/resources/${resourceId}`),
     api.get(`/tasks/?resource_id=${resourceId}`),
+    api.get('/tasks/'),
     api.get('/projects/'),
     api.get(`/resources/${resourceId}/windows`),
     api.get(`/resources/${resourceId}/blockouts`),
   ]);
 
   const projectById = Object.fromEntries(projects.map(p => [p.id, p]));
+  const taskById    = Object.fromEntries(allTasks.map(t => [t.id, t]));
   const kindLabel   = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
   const DONE_STATUSES = new Set(['done', 'failed']);
 
   const visible = showCompleted ? tasks : tasks.filter(t => !DONE_STATUSES.has(t.status));
   const hiddenCount = tasks.length - visible.length;
 
+  // Blocked tasks always sort to the bottom
+  visible.sort((a, b) => {
+    const aBlocked = a.status === 'blocked' ? 1 : 0;
+    const bBlocked = b.status === 'blocked' ? 1 : 0;
+    if (aBlocked !== bBlocked) return aBlocked - bBlocked;
+    const aMs = a.start_date ? new Date(a.start_date).getTime() : Infinity;
+    const bMs = b.start_date ? new Date(b.start_date).getTime() : Infinity;
+    return aMs - bMs;
+  });
+
   const rows = visible.map(t => {
     const project = projectById[t.project_id] || {};
+    const dep = t.depends_on_id ? taskById[t.depends_on_id] : null;
+    const depHtml = dep
+      ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
+      : (t.depends_on_id ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">↳ #${t.depends_on_id}</div>` : '');
     return `<tr>
-      <td>${escHtml(t.title)}${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escHtml(t.description)}</div>` : ''}</td>
+      <td>${escHtml(t.title)}${depHtml}${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escHtml(t.description)}</div>` : ''}</td>
       <td>${escHtml(project.name || '—')}</td>
       <td>${statusBadge(t.status)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
