@@ -74,6 +74,8 @@ class Task(SQLModel, table=True):
     depends_on_id: Optional[int] = Field(
         default=None, foreign_key="task.id", index=True
     )
+    # When true, re-align skips this task and schedules around its existing dates.
+    pinned: bool = Field(default=False)
 
     project: Optional[Project] = Relationship(back_populates="tasks")
 

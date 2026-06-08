@@ -61,6 +61,10 @@ def apply_migrations(engine):
             conn.execute(text("ALTER TABLE task ADD COLUMN description TEXT"))
             conn.commit()
 
+        if "pinned" not in task_cols:
+            conn.execute(text("ALTER TABLE task ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
+            conn.commit()
+
         # Make resource.capacity nullable if the DB was created with the old schema
         # (capacity was NOT NULL). SQLite can't ALTER COLUMN, so we recreate the table.
         result = conn.execute(text("PRAGMA table_info(resource)"))

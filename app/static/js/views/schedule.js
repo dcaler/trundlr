@@ -93,13 +93,39 @@ async function realignSchedule(resources, tasks, projects) {
     blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
   } catch (_) {}
 
+  // Advance cursor past any pinned task whose time slot it would overlap.
+  // Loops because skipping one slot may land inside another.
+  const skipPinned = (ms, slots) => {
+    let c = ms, changed = true;
+    while (changed) {
+      changed = false;
+      for (const s of slots) {
+        if (c < s.end && c > s.start - 1) { c = s.end; changed = true; }
+      }
+    }
+    return c;
+  };
+
   for (const resource of resources) {
     const onResource = t => (t.resource_ids || []).includes(resource.id);
     const blockouts  = blockoutsByResource[resource.id] || [];
 
+    // Pinned todo tasks keep their existing dates; record them in patchMap so
+    // dependency resolution uses their times, and build obstacle list.
+    const pinnedTasks = tasks.filter(t =>
+      onResource(t) && t.status === 'todo' && t.pinned && t.start_date && t.end_date && !patchMap.has(t.id)
+    );
+    for (const t of pinnedTasks) {
+      patchMap.set(t.id, { start: t.start_date, end: t.end_date, pinned: true });
+    }
+    const pinnedSlots = pinnedTasks.map(t => ({
+      start: new Date(t.start_date).getTime(),
+      end:   new Date(t.end_date).getTime(),
+    }));
+
     // Only todo tasks are moved; already-claimed tasks (from earlier resource iterations) are skipped
     const movable = tasks
-      .filter(t => onResource(t) && t.status === 'todo' && !patchMap.has(t.id))
+      .filter(t => onResource(t) && t.status === 'todo' && !t.pinned && !patchMap.has(t.id))
       .sort((a, b) => {
         const pa = priorityByProject[a.project_id] || 3;
         const pb = priorityByProject[b.project_id] || 3;
@@ -145,11 +171,15 @@ async function realignSchedule(resources, tasks, projects) {
       if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
 
       cursor = nextSlotInWindow(cursor, resource, blockouts);
+      cursor = skipPinned(cursor, pinnedSlots);
       // Fit-to-window only makes sense for resources with bounded working hours
       // (human/ai).  CPU/GPU run 24/7 — pushing to midnight creates false gaps.
       if (resource.kind === 'human' || resource.kind === 'ai') {
         const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
-        if (cursor + dur > wE && cursor > wS) cursor = nextSlotInWindow(wE, resource, blockouts);
+        if (cursor + dur > wE && cursor > wS) {
+          cursor = nextSlotInWindow(wE, resource, blockouts);
+          cursor = skipPinned(cursor, pinnedSlots);
+        }
       }
 
       patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
@@ -160,7 +190,8 @@ async function realignSchedule(resources, tasks, projects) {
   // PATCH only tasks whose time actually changed; return the count of changes
   // Compare timestamps, not strings — API may return with timezone suffixes or microseconds
   let changed = 0;
-  for (const [id, { start, end }] of patchMap.entries()) {
+  for (const [id, { start, end, pinned }] of patchMap.entries()) {
+    if (pinned) continue; // pinned tasks keep their existing dates
     const task = tasks.find(t => t.id === id);
     const storedMs   = task?.start_date ? new Date(task.start_date).getTime() : null;
     const computedMs = new Date(start).getTime();
