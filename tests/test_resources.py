@@ -191,3 +191,126 @@ def test_create_defaults_applied(client):
     assert body["available_from"] == "09:00"
     assert body["available_to"] == "17:00"
     assert body["available_days"] == 31
+
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+
+class TestWindows:
+    def _resource(self, client):
+        return client.post("/api/resources/", json=HUMAN).json()
+
+    def test_list_empty(self, client):
+        r = self._resource(client)
+        resp = client.get(f"/api/resources/{r['id']}/windows")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_create_and_list(self, client):
+        r = self._resource(client)
+        payload = {"day_of_week": 0, "from_time": "09:00", "to_time": "12:00"}
+        resp = client.post(f"/api/resources/{r['id']}/windows", json=payload)
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["day_of_week"] == 0
+        assert body["from_time"] == "09:00"
+        assert body["to_time"] == "12:00"
+        assert body["resource_id"] == r["id"]
+
+        windows = client.get(f"/api/resources/{r['id']}/windows").json()
+        assert len(windows) == 1
+
+    def test_delete_window(self, client):
+        r = self._resource(client)
+        w = client.post(f"/api/resources/{r['id']}/windows",
+                        json={"day_of_week": 1, "from_time": "09:00", "to_time": "17:00"}).json()
+        assert client.delete(f"/api/resources/{r['id']}/windows/{w['id']}").status_code == 204
+        assert client.get(f"/api/resources/{r['id']}/windows").json() == []
+
+    def test_404_on_missing_resource(self, client):
+        assert client.get("/api/resources/9999/windows").status_code == 404
+        assert client.post("/api/resources/9999/windows",
+                           json={"day_of_week": 0, "from_time": "09:00", "to_time": "17:00"}).status_code == 404
+
+    def test_404_on_missing_window(self, client):
+        r = self._resource(client)
+        assert client.delete(f"/api/resources/{r['id']}/windows/9999").status_code == 404
+
+    def test_invalid_day_of_week(self, client):
+        r = self._resource(client)
+        resp = client.post(f"/api/resources/{r['id']}/windows",
+                           json={"day_of_week": 7, "from_time": "09:00", "to_time": "17:00"})
+        assert resp.status_code == 422
+
+    def test_to_before_from_rejected(self, client):
+        r = self._resource(client)
+        resp = client.post(f"/api/resources/{r['id']}/windows",
+                           json={"day_of_week": 0, "from_time": "17:00", "to_time": "09:00"})
+        assert resp.status_code == 422
+
+    def test_deleted_with_resource(self, client):
+        r = self._resource(client)
+        client.post(f"/api/resources/{r['id']}/windows",
+                    json={"day_of_week": 0, "from_time": "09:00", "to_time": "17:00"})
+        client.delete(f"/api/resources/{r['id']}")
+        assert client.get(f"/api/resources/{r['id']}/windows").status_code == 404
+
+
+# ── Blockouts ─────────────────────────────────────────────────────────────────
+
+class TestBlockouts:
+    def _resource(self, client):
+        return client.post("/api/resources/", json=HUMAN).json()
+
+    def test_list_empty(self, client):
+        r = self._resource(client)
+        resp = client.get(f"/api/resources/{r['id']}/blockouts")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_create_full_day_blockout(self, client):
+        r = self._resource(client)
+        payload = {"start_date": "2026-06-15", "end_date": "2026-06-20"}
+        resp = client.post(f"/api/resources/{r['id']}/blockouts", json=payload)
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["start_date"] == "2026-06-15"
+        assert body["end_date"] == "2026-06-20"
+        assert body["from_time"] is None
+        assert body["note"] is None
+
+    def test_create_partial_day_blockout(self, client):
+        r = self._resource(client)
+        payload = {
+            "start_date": "2026-06-15", "end_date": "2026-06-15",
+            "from_time": "12:00", "to_time": "13:00",
+            "note": "Lunch",
+        }
+        resp = client.post(f"/api/resources/{r['id']}/blockouts", json=payload)
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["from_time"] == "12:00"
+        assert body["to_time"] == "13:00"
+        assert body["note"] == "Lunch"
+
+    def test_delete_blockout(self, client):
+        r = self._resource(client)
+        b = client.post(f"/api/resources/{r['id']}/blockouts",
+                        json={"start_date": "2026-07-01", "end_date": "2026-07-05"}).json()
+        assert client.delete(f"/api/resources/{r['id']}/blockouts/{b['id']}").status_code == 204
+        assert client.get(f"/api/resources/{r['id']}/blockouts").json() == []
+
+    def test_end_before_start_rejected(self, client):
+        r = self._resource(client)
+        resp = client.post(f"/api/resources/{r['id']}/blockouts",
+                           json={"start_date": "2026-06-20", "end_date": "2026-06-15"})
+        assert resp.status_code == 422
+
+    def test_404_on_missing_resource(self, client):
+        assert client.get("/api/resources/9999/blockouts").status_code == 404
+
+    def test_deleted_with_resource(self, client):
+        r = self._resource(client)
+        client.post(f"/api/resources/{r['id']}/blockouts",
+                    json={"start_date": "2026-06-15", "end_date": "2026-06-20"})
+        client.delete(f"/api/resources/{r['id']}")
+        assert client.get(f"/api/resources/{r['id']}/blockouts").status_code == 404
