@@ -101,13 +101,24 @@ def apply_migrations(engine):
             conn.execute(text("ALTER TABLE resource ADD COLUMN available_from TEXT"))
             conn.execute(text("ALTER TABLE resource ADD COLUMN available_to TEXT"))
             conn.execute(text("ALTER TABLE resource ADD COLUMN available_days INTEGER"))
-            # Seed defaults for existing human resources
             conn.execute(text(
                 "UPDATE resource SET available_from='09:00', available_to='17:00', "
                 "available_days=31 WHERE kind='human'"
             ))
             conn.execute(text("UPDATE resource SET capacity=NULL WHERE kind='human'"))
             conn.commit()
+
+        # Backfill any resources still missing availability — covers DBs where the
+        # columns exist but were never populated (e.g. cpu/gpu from earlier migrations).
+        conn.execute(text(
+            "UPDATE resource SET available_from='09:00', available_to='17:00', available_days=31 "
+            "WHERE available_from IS NULL AND kind='human'"
+        ))
+        conn.execute(text(
+            "UPDATE resource SET available_from='00:00', available_to='23:59', available_days=127 "
+            "WHERE available_from IS NULL AND kind IN ('ai', 'cpu', 'gpu')"
+        ))
+        conn.commit()
 
         for col in ("start_date", "end_date"):
             conn.execute(text(
