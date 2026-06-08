@@ -1369,7 +1369,7 @@ tests/
 ### Git commit
 ```
 commit 134731b98e1f6e0104badcd07ea2928315fad52b
-Author: dcaler <dcaler@users.noreply.github.com>
+Author: dcaler
 Date:   Thu May 28 15:20:09 2026 +0100
 
     feat: add GitHub Actions CI pipeline for automated testing and Docker builds
