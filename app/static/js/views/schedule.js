@@ -2,6 +2,34 @@
 
 const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
 
+// ── Availability helpers ──────────────────────────────────────────────────
+
+// Advance cursorMs to the next moment inside resource.available_from/to/days.
+// If cursor is already inside a window, return it unchanged.
+function nextSlotInWindow(cursorMs, resource) {
+  const [fh, fm] = (resource.available_from || '00:00').split(':').map(Number);
+  const [th, tm] = (resource.available_to   || '23:59').split(':').map(Number);
+  const fromOffsetMs = (fh * 60 + fm) * 60000;
+  const toOffsetMs   = (th * 60 + tm) * 60000;
+  let probe = cursorMs;
+  for (let i = 0; i < 365; i++) {
+    const d   = new Date(probe);
+    const dow = (d.getDay() + 6) % 7; // 0=Mon … 6=Sun
+    const dayStart   = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const windowStart = dayStart + fromOffsetMs;
+    const windowEnd   = dayStart + toOffsetMs;
+    if ((resource.available_days & (1 << dow)) && probe >= windowStart && probe < windowEnd) {
+      return probe; // already inside a valid window
+    }
+    if ((resource.available_days & (1 << dow)) && probe < windowStart) {
+      return windowStart; // today is available, jump to window start
+    }
+    // Skip to next day's window start
+    probe = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() + fromOffsetMs;
+  }
+  return probe;
+}
+
 // ── Re-align: sort tasks by project priority per resource, sequential start times ─
 
 async function realignSchedule(resources, tasks, projects) {
@@ -9,9 +37,11 @@ async function realignSchedule(resources, tasks, projects) {
   const patchMap = new Map();
 
   for (const resource of resources) {
-    const resTasks = tasks
-      .filter(t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date
-               && (t.status === 'todo' || t.status === 'blocked') && !patchMap.has(t.id))
+    const onResource = t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date;
+
+    // Tasks we will move: todo/blocked only, not already claimed by another resource loop
+    const movable = tasks
+      .filter(t => onResource(t) && (t.status === 'todo' || t.status === 'blocked') && !patchMap.has(t.id))
       .sort((a, b) => {
         const pa = priorityByProject[a.project_id] || 3;
         const pb = priorityByProject[b.project_id] || 3;
@@ -19,23 +49,27 @@ async function realignSchedule(resources, tasks, projects) {
         return new Date(a.start_date) - new Date(b.start_date);
       });
 
-    if (!resTasks.length) continue;
+    if (!movable.length) continue;
 
-    const anchor = Math.max(
-      Math.min(...resTasks.map(t => new Date(t.start_date).getTime())),
-      Date.now()
-    );
-    let cursor = anchor;
+    // Start cursor after any task already occupying this resource (in_progress / done / failed)
+    // so we never schedule a movable task on top of an active one.
+    const fixedEnd = tasks
+      .filter(t => onResource(t) && t.status !== 'todo' && t.status !== 'blocked')
+      .reduce((mx, t) => Math.max(mx, new Date(t.end_date || t.start_date).getTime()), 0);
 
-    for (const task of resTasks) {
+    let cursor = Math.max(fixedEnd, Date.now());
+
+    const fmt = ms => {
+      const d = new Date(ms);
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+    };
+
+    for (const task of movable) {
+      cursor = nextSlotInWindow(cursor, resource);
       const origStart = new Date(task.start_date).getTime();
       const dur = new Date(task.end_date).getTime() - origStart;
       if (cursor !== origStart) {
-        const fmt = ms => {
-          const d = new Date(ms);
-          const p = n => String(n).padStart(2, '0');
-          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
-        };
         patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
       }
       cursor += dur;
@@ -243,12 +277,10 @@ function buildDateHeader(dates, today) {
 }
 
 function utilizationColor(pct) {
-  if (pct <= 0)  return { bg: '#f8f9fa', fg: '#adb5bd' };
-  if (pct < 60)  return { bg: '#d1e7dd', fg: '#0a3622' };
-  if (pct < 80)  return { bg: '#a3cfbb', fg: '#0a3622' };
-  if (pct < 100) return { bg: '#ffc107', fg: '#212529' };
-  if (pct === 100) return { bg: '#fd7e14', fg: 'white' };
-  return { bg: '#dc3545', fg: 'white' };
+  if (pct <= 0)   return { bg: '#f8f9fa', fg: '#adb5bd' }; // empty
+  if (pct < 100)  return { bg: '#d1e7dd', fg: '#0a3622' }; // partial (unavailable day with 0 committed: shouldn't show, but safe)
+  if (pct === 100) return { bg: '#fd7e14', fg: 'white' };  // exactly 1 task
+  return { bg: '#dc3545', fg: 'white' };                   // >1 task = conflict
 }
 
 function buildUtilResourceRow(resource, conflictsByDay, today) {
@@ -301,12 +333,9 @@ function buildUtilHtml(utilData, conflictsMap, dates, today) {
 
   return `
     <div class="gantt-legend" style="margin-top:0.75rem">
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#f8f9fa;border:1px solid #dee2e6"></span>0%</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#d1e7dd"></span>&lt;60%</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#a3cfbb"></span>60–79%</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#ffc107"></span>80–99%</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#fd7e14"></span>100%</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#dc3545"></span>&gt;100% ⚠</span>
+      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#f8f9fa;border:1px solid #dee2e6"></span>Free</span>
+      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#fd7e14"></span>1 task</span>
+      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#dc3545"></span>2+ tasks ⚠</span>
       <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Hover a cell for details</span>
     </div>
     <div class="gantt-scroll-wrapper">

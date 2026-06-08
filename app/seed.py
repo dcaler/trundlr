@@ -21,7 +21,7 @@ def seed_data(session: Session) -> None:
     session.add(project_website)
     session.add(project_ml)
     session.add(project_infra)
-    session.flush()  # Assign IDs without committing
+    session.flush()
 
     # Resources: humans
     alice = Resource(name="Alice", kind=ResourceKind.human,
@@ -31,9 +31,11 @@ def seed_data(session: Session) -> None:
     charlie = Resource(name="Charlie", kind=ResourceKind.human,
                        available_from="09:00", available_to="17:00", available_days=31)
 
-    # Resources: compute
-    cpu_node = Resource(name="CPU Node 1", kind=ResourceKind.cpu, capacity=4.0)
-    gpu_node = Resource(name="GPU Node 1", kind=ResourceKind.gpu, capacity=2.0)
+    # Resources: compute (same availability model as humans)
+    cpu_node = Resource(name="CPU Node 1", kind=ResourceKind.cpu,
+                        available_from="00:00", available_to="23:59", available_days=127)
+    gpu_node = Resource(name="GPU Node 1", kind=ResourceKind.gpu,
+                        available_from="00:00", available_to="23:59", available_days=127)
 
     session.add(alice)
     session.add(bob)
@@ -53,7 +55,6 @@ def seed_data(session: Session) -> None:
         title="Design mockups",
         status=TaskStatus.in_progress,
         project_id=project_website.id,
-        load=6.0,
         start_date=today,
         end_date=next_week,
     )
@@ -61,7 +62,6 @@ def seed_data(session: Session) -> None:
         title="Build frontend",
         status=TaskStatus.todo,
         project_id=project_website.id,
-        load=8.0,
         start_date=next_week,
         end_date=next_month,
     )
@@ -71,7 +71,6 @@ def seed_data(session: Session) -> None:
         title="Data preparation",
         status=TaskStatus.in_progress,
         project_id=project_ml.id,
-        load=4.0,
         start_date=today,
         end_date=next_week,
     )
@@ -79,7 +78,6 @@ def seed_data(session: Session) -> None:
         title="Model training",
         status=TaskStatus.blocked,
         project_id=project_ml.id,
-        load=2.0,
         start_date=next_week,
         end_date=next_month,
     )
@@ -89,7 +87,6 @@ def seed_data(session: Session) -> None:
         title="Network optimization",
         status=TaskStatus.todo,
         project_id=project_infra.id,
-        load=5.0,
         start_date=tomorrow,
         end_date=next_week,
     )
@@ -97,7 +94,6 @@ def seed_data(session: Session) -> None:
         title="Monitoring setup",
         status=TaskStatus.todo,
         project_id=project_infra.id,
-        load=3.0,
         start_date=next_week,
         end_date=next_month,
     )

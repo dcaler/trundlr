@@ -11,105 +11,103 @@ from app.scheduling import detect_conflicts, resource_conflicts
 D = date
 
 
-def _mk_resource(capacity=None, kind=ResourceKind.gpu, rid=1):
-    if kind == ResourceKind.human:
-        r = Resource(name="r", kind=kind, available_from="09:00",
-                     available_to="17:00", available_days=31)
-    else:
-        r = Resource(name="r", kind=kind, capacity=capacity)
+def _mk_resource(kind=ResourceKind.human, rid=1, available_from="09:00",
+                 available_to="17:00", available_days=31):
+    r = Resource(name="r", kind=kind, available_from=available_from,
+                 available_to=available_to, available_days=available_days)
     r.id = rid
     return r
 
 
-def _task(title, load, start, end):
-    return Task(title=title, project_id=1, load=load, start_date=start, end_date=end)
+def _task(title, start, end):
+    return Task(title=title, project_id=1, start_date=start, end_date=end)
 
 
-def test_overbooked_gpu_flags_days_and_contributing_tasks():
-    # Plan's core case: 3 tasks needing 2 slots each on a 4-slot node.
-    gpu = _mk_resource(4.0)
+def test_two_concurrent_tasks_flags_conflict():
+    # 2 tasks → committed=2, capacity=1 → conflict on both days
+    res = _mk_resource()
     tasks = [
-        _task("A", 2.0, D(2026, 6, 1), D(2026, 6, 2)),
-        _task("B", 2.0, D(2026, 6, 1), D(2026, 6, 2)),
-        _task("C", 2.0, D(2026, 6, 1), D(2026, 6, 2)),
+        _task("A", D(2026, 6, 1), D(2026, 6, 2)),
+        _task("B", D(2026, 6, 1), D(2026, 6, 2)),
     ]
-    conflicts = detect_conflicts(gpu, tasks, D(2026, 6, 1), D(2026, 6, 2))
-
+    conflicts = detect_conflicts(res, tasks, D(2026, 6, 1), D(2026, 6, 2))
     assert [c.day for c in conflicts] == [D(2026, 6, 1), D(2026, 6, 2)]
     for c in conflicts:
-        assert c.committed == pytest.approx(6.0)
-        assert c.capacity == 4.0
-        assert c.overage == pytest.approx(2.0)
-        assert {t.title for t in c.tasks} == {"A", "B", "C"}
+        assert c.committed == pytest.approx(2.0)
+        assert c.capacity == pytest.approx(1.0)
+        assert c.overage == pytest.approx(1.0)
+        assert {t.title for t in c.tasks} == {"A", "B"}
 
 
-def test_fully_booked_is_not_flagged():
-    # Off-by-one guard: committed == capacity must NOT be a conflict.
-    gpu = _mk_resource(4.0)
-    tasks = [
-        _task("A", 2.0, D(2026, 6, 1), D(2026, 6, 2)),
-        _task("B", 2.0, D(2026, 6, 1), D(2026, 6, 2)),
-    ]
-    assert detect_conflicts(gpu, tasks, D(2026, 6, 1), D(2026, 6, 2)) == []
+def test_one_task_is_not_a_conflict():
+    # 1 task = fully booked (100%) — NOT a conflict
+    res = _mk_resource()
+    tasks = [_task("A", D(2026, 6, 1), D(2026, 6, 2))]
+    assert detect_conflicts(res, tasks, D(2026, 6, 1), D(2026, 6, 2)) == []
 
 
-def test_only_overbooked_days_are_flagged():
-    # A+B fill the node exactly on Jun 1 & 3; C pushes Jun 2 over.
-    gpu = _mk_resource(4.0)
-    a = _task("A", 2.0, D(2026, 6, 1), D(2026, 6, 3))
-    b = _task("B", 2.0, D(2026, 6, 1), D(2026, 6, 3))
-    c = _task("C", 2.0, D(2026, 6, 2), D(2026, 6, 2))
-    conflicts = detect_conflicts(gpu, [a, b, c], D(2026, 6, 1), D(2026, 6, 3))
-
+def test_only_conflict_days_flagged():
+    # A alone on Jun 1 (no conflict); A+B on Jun 2 (conflict); A alone on Jun 3 (no conflict)
+    res = _mk_resource()
+    a = _task("A", D(2026, 6, 1), D(2026, 6, 3))
+    b = _task("B", D(2026, 6, 2), D(2026, 6, 2))
+    conflicts = detect_conflicts(res, [a, b], D(2026, 6, 1), D(2026, 6, 3))
     assert [x.day for x in conflicts] == [D(2026, 6, 2)]
-    assert {t.title for t in conflicts[0].tasks} == {"A", "B", "C"}
-    assert conflicts[0].overage == pytest.approx(2.0)
+    assert {t.title for t in conflicts[0].tasks} == {"A", "B"}
+    assert conflicts[0].overage == pytest.approx(1.0)
 
 
-def test_barely_over_is_flagged():
-    # Strict > also catches a small overage from the other side of the boundary.
-    gpu = _mk_resource(4.0)
+def test_three_concurrent_tasks_overage():
+    res = _mk_resource()
     tasks = [
-        _task("A", 2.0, D(2026, 6, 1), D(2026, 6, 1)),
-        _task("B", 2.0, D(2026, 6, 1), D(2026, 6, 1)),
-        _task("C", 0.5, D(2026, 6, 1), D(2026, 6, 1)),
+        _task("A", D(2026, 6, 1), D(2026, 6, 1)),
+        _task("B", D(2026, 6, 1), D(2026, 6, 1)),
+        _task("C", D(2026, 6, 1), D(2026, 6, 1)),
+    ]
+    conflicts = detect_conflicts(res, tasks, D(2026, 6, 1), D(2026, 6, 1))
+    assert len(conflicts) == 1
+    assert conflicts[0].committed == pytest.approx(3.0)
+    assert conflicts[0].overage == pytest.approx(2.0)
+    assert {t.title for t in conflicts[0].tasks} == {"A", "B", "C"}
+
+
+def test_no_conflicts_single_task():
+    res = _mk_resource()
+    tasks = [_task("A", D(2026, 6, 1), D(2026, 6, 3))]
+    assert detect_conflicts(res, tasks, D(2026, 6, 1), D(2026, 6, 3)) == []
+
+
+def test_gpu_all_week_two_tasks_conflict():
+    # GPU available every day; 2 concurrent tasks → conflict
+    gpu = _mk_resource(kind=ResourceKind.gpu, available_days=127)
+    tasks = [
+        _task("morning", D(2026, 6, 1), D(2026, 6, 1)),
+        _task("afternoon", D(2026, 6, 1), D(2026, 6, 1)),
     ]
     conflicts = detect_conflicts(gpu, tasks, D(2026, 6, 1), D(2026, 6, 1))
     assert len(conflicts) == 1
-    assert conflicts[0].overage == pytest.approx(0.5)
-
-
-def test_no_conflicts_under_capacity():
-    gpu = _mk_resource(4.0)
-    tasks = [_task("A", 1.0, D(2026, 6, 1), D(2026, 6, 3))]
-    assert detect_conflicts(gpu, tasks, D(2026, 6, 1), D(2026, 6, 3)) == []
-
-
-def test_human_hours_over_allocation_is_kind_agnostic():
-    # Same algorithm flags an over-booked human (hours) as a compute node (slots).
-    # Jun 1 2026 = Monday; 09:00-17:00 availability gives 8 h capacity.
-    human = _mk_resource(kind=ResourceKind.human)
-    tasks = [
-        _task("morning", 5.0, D(2026, 6, 1), D(2026, 6, 1)),
-        _task("afternoon", 5.0, D(2026, 6, 1), D(2026, 6, 1)),
-    ]
-    conflicts = detect_conflicts(human, tasks, D(2026, 6, 1), D(2026, 6, 1))
-    assert len(conflicts) == 1
-    assert conflicts[0].committed == pytest.approx(10.0)
-    assert conflicts[0].overage == pytest.approx(2.0)
+    assert conflicts[0].committed == pytest.approx(2.0)
+    assert conflicts[0].overage == pytest.approx(1.0)
 
 
 def test_contributing_tasks_exclude_nonoverlapping():
-    # `detect_conflicts` receives only the resource's own tasks (caller pre-filters).
-    # Tasks from other days should not appear in contributing tasks.
-    gpu = _mk_resource(4.0, rid=1)
-    a = _task("A", 3.0, D(2026, 6, 2), D(2026, 6, 2))
-    b = _task("B", 3.0, D(2026, 6, 2), D(2026, 6, 2))
-    earlier = _task("earlier", 4.0, D(2026, 6, 1), D(2026, 6, 1))  # different day
-    conflicts = detect_conflicts(gpu, [a, b, earlier], D(2026, 6, 2), D(2026, 6, 2))
-
+    res = _mk_resource(rid=1)
+    a = _task("A", D(2026, 6, 2), D(2026, 6, 2))
+    b = _task("B", D(2026, 6, 2), D(2026, 6, 2))
+    earlier = _task("earlier", D(2026, 6, 1), D(2026, 6, 1))
+    conflicts = detect_conflicts(res, [a, b, earlier], D(2026, 6, 2), D(2026, 6, 2))
     assert len(conflicts) == 1
     assert {t.title for t in conflicts[0].tasks} == {"A", "B"}
+
+
+def test_task_on_unavailable_day_is_conflict():
+    # Resource only Mon-Fri (available_days=31); Saturday task → conflict
+    res = _mk_resource(available_days=31)
+    tasks = [_task("weekend", D(2026, 6, 6), D(2026, 6, 6))]  # Saturday
+    conflicts = detect_conflicts(res, tasks, D(2026, 6, 6), D(2026, 6, 6))
+    assert len(conflicts) == 1
+    assert conflicts[0].capacity == pytest.approx(0.0)
+    assert conflicts[0].committed == pytest.approx(1.0)
 
 
 # --- DB entrypoint ------------------------------------------------------------
@@ -132,16 +130,14 @@ def session():
 
 def test_resource_conflicts_db(session):
     project = Project(name="P")
-    gpu = Resource(name="dgx", kind=ResourceKind.gpu, capacity=4.0)
+    gpu = Resource(name="dgx", kind=ResourceKind.gpu,
+                   available_from="00:00", available_to="23:59", available_days=127)
     session.add_all([project, gpu])
     session.commit()
     tasks = [
-        Task(title="A", project_id=project.id, load=2.0,
-             start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
-        Task(title="B", project_id=project.id, load=2.0,
-             start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
-        Task(title="C", project_id=project.id, load=2.0,
-             start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
+        Task(title="A", project_id=project.id, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
+        Task(title="B", project_id=project.id, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
+        Task(title="C", project_id=project.id, start_date=D(2026, 6, 1), end_date=D(2026, 6, 1)),
     ]
     session.add_all(tasks)
     session.flush()

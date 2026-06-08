@@ -3,10 +3,7 @@
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_VALUES = [1, 2, 4, 8, 16, 32, 64];
 
-const AVAILABILITY_KINDS = new Set(['human', 'ai']);
-
 function availabilityLabel(r) {
-  if (!AVAILABILITY_KINDS.has(r.kind)) return null;
   const from = r.available_from || '?';
   const to   = r.available_to   || '?';
   const days = DAY_VALUES
@@ -14,14 +11,6 @@ function availabilityLabel(r) {
     .filter(Boolean)
     .join(' ');
   return `${days} ${from}–${to}`;
-}
-
-function parseDaysMask(form) {
-  let mask = 0;
-  DAY_VALUES.forEach((v, i) => {
-    if (form.querySelector(`[name="day_${i}"]`)?.checked) mask |= v;
-  });
-  return mask;
 }
 
 function dayCheckboxes(selected = 31) {
@@ -53,13 +42,6 @@ function availabilityFields(r = null) {
     </div>`;
 }
 
-function capacityField(r = null) {
-  const val = r?.capacity ?? 4;
-  return `<div><label>Capacity</label>
-    <input type="number" name="capacity" value="${val}" required min="0.01" step="any"
-           style="width:80px" title="parallel slots for compute"></div>`;
-}
-
 function kindField(selected = 'human', includeLabel = true) {
   const opt = (val, label) =>
     `<option value="${val}"${selected === val ? ' selected' : ''}>${label}</option>`;
@@ -73,19 +55,6 @@ function kindField(selected = 'human', includeLabel = true) {
   </div>`;
 }
 
-function buildPayload(fd, kind) {
-  if (kind === 'human') {
-    return {
-      name: fd.get('name'),
-      kind,
-      available_from: fd.get('available_from'),
-      available_to:   fd.get('available_to'),
-      available_days: parseInt(fd.get('available_days') || '0'),
-    };
-  }
-  return { name: fd.get('name'), kind, capacity: parseFloat(fd.get('capacity')) };
-}
-
 function collectDaysFromForm(form) {
   let mask = 0;
   DAY_VALUES.forEach((v, i) => {
@@ -94,18 +63,14 @@ function collectDaysFromForm(form) {
   return mask;
 }
 
-function wireKindToggle(container, kindSelect, showCreate = true) {
-  function refresh() {
-    const isHuman = AVAILABILITY_KINDS.has(kindSelect.value);
-    container.querySelectorAll('.avail-fields').forEach(el => {
-      el.style.display = isHuman ? '' : 'none';
-    });
-    container.querySelectorAll('.capacity-field').forEach(el => {
-      el.style.display = isHuman ? 'none' : '';
-    });
-  }
-  kindSelect.addEventListener('change', refresh);
-  refresh();
+function buildPayload(fd, form) {
+  return {
+    name: fd.get('name'),
+    kind: fd.get('kind'),
+    available_from: fd.get('available_from'),
+    available_to:   fd.get('available_to'),
+    available_days: collectDaysFromForm(form),
+  };
 }
 
 async function showResourceDetail(el, resourceId) {
@@ -118,9 +83,6 @@ async function showResourceDetail(el, resourceId) {
 
   const projectById = Object.fromEntries(projects.map(p => [p.id, p]));
   const kindLabel   = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
-  const avail = AVAILABILITY_KINDS.has(resource.kind)
-    ? escHtml(availabilityLabel(resource) || '—')
-    : `${resource.capacity} slots`;
 
   const rows = tasks.map(t => {
     const project = projectById[t.project_id] || {};
@@ -138,7 +100,7 @@ async function showResourceDetail(el, resourceId) {
       <button class="btn btn-ghost back-btn">← Resources</button>
     </div>
     <h1>${escHtml(resource.name)}</h1>
-    <p style="color:var(--text-muted);margin-bottom:1.5rem">${escHtml(kindLabel[resource.kind] || resource.kind)} · ${avail}</p>
+    <p style="color:var(--text-muted);margin-bottom:1.5rem">${escHtml(kindLabel[resource.kind] || resource.kind)} · ${escHtml(availabilityLabel(resource))}</p>
 
     <h2>Tasks (${tasks.length})</h2>
     ${tasks.length === 0
@@ -158,21 +120,17 @@ async function showResourcesList(el, editingId = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
   const resources = await api.get('/resources/');
 
-  const kindLabel = { human: 'Human', ai: 'AI', cpu: 'CPU (slots)', gpu: 'GPU (slots)' };
+  const kindLabel = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
 
   const rows = resources.map(r => {
     if (r.id === editingId) {
-      const isHuman = AVAILABILITY_KINDS.has(r.kind);
       return `<tr class="edit-row" data-id="${r.id}">
         <td colspan="4">
           <form class="form-row edit-resource-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
             <div><label>Name</label><input name="name" value="${escHtml(r.name)}" required style="width:160px"></div>
             ${kindField(r.kind)}
-            <div class="avail-fields" style="display:${isHuman ? '' : 'none'}">
+            <div class="avail-fields">
               ${availabilityFields(r)}
-            </div>
-            <div class="capacity-field" style="display:${isHuman ? 'none' : ''}">
-              ${capacityField(r)}
             </div>
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
@@ -183,14 +141,10 @@ async function showResourcesList(el, editingId = null) {
       </tr>`;
     }
 
-    const avail = AVAILABILITY_KINDS.has(r.kind)
-      ? escHtml(availabilityLabel(r) || '—')
-      : `${r.capacity} slots`;
-
     return `<tr>
       <td><button class="btn btn-ghost view-resource-btn" data-id="${r.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(r.name)}</button></td>
       <td>${escHtml(kindLabel[r.kind] || r.kind)}</td>
-      <td>${avail}</td>
+      <td>${escHtml(availabilityLabel(r))}</td>
       <td style="text-align:right;white-space:nowrap">
         <a href="/api/resources/${r.id}/calendar.ics" title="Subscribe (iCal)"
            style="margin-right:0.4rem;text-decoration:none;font-size:1rem">&#128197;</a>
@@ -212,9 +166,6 @@ async function showResourcesList(el, editingId = null) {
       <div class="avail-fields">
         ${availabilityFields()}
       </div>
-      <div class="capacity-field" style="display:none">
-        ${capacityField()}
-      </div>
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ Add Resource</button>
       </div>
@@ -224,33 +175,17 @@ async function showResourcesList(el, editingId = null) {
       ? '<p style="color:var(--text-muted)">No resources yet — add one above.</p>'
       : `<table>
           <thead><tr>
-            <th>Name</th><th>Kind</th><th>Availability / Capacity</th><th style="width:120px"></th>
+            <th>Name</th><th>Kind</th><th>Availability</th><th style="width:120px"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`}
   `;
 
-  // Wire kind toggle on create form
   const createForm = el.querySelector('#create-resource-form');
-  wireKindToggle(createForm, createForm.querySelector('[name="kind"]'));
-
   createForm.addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const kind = fd.get('kind');
-    const payload = AVAILABILITY_KINDS.has(kind)
-      ? {
-          name: fd.get('name'),
-          kind,
-          available_from: fd.get('available_from'),
-          available_to:   fd.get('available_to'),
-          available_days: collectDaysFromForm(e.target),
-        }
-      : {
-          name: fd.get('name'),
-          kind,
-          capacity: parseFloat(fd.get('capacity')),
-        };
+    const payload = buildPayload(fd, e.target);
     try {
       await api.post('/resources/', payload);
       await showResourcesList(el);
@@ -268,25 +203,11 @@ async function showResourcesList(el, editingId = null) {
   const editForm = el.querySelector('.edit-resource-form');
   if (editForm) {
     const editRow = editForm.closest('tr');
-    wireKindToggle(editForm, editForm.querySelector('[name="kind"]'));
 
     editForm.addEventListener('submit', async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const kind = fd.get('kind');
-      const payload = AVAILABILITY_KINDS.has(kind)
-        ? {
-            name: fd.get('name'),
-            kind,
-            available_from: fd.get('available_from'),
-            available_to:   fd.get('available_to'),
-            available_days: collectDaysFromForm(e.target),
-          }
-        : {
-            name: fd.get('name'),
-            kind,
-            capacity: parseFloat(fd.get('capacity')),
-          };
+      const payload = buildPayload(fd, e.target);
       try {
         await api.patch(`/resources/${editRow.dataset.id}`, payload);
         await showResourcesList(el);

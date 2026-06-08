@@ -6,12 +6,6 @@ from sqlmodel import Field, Relationship, SQLModel
 
 
 class ResourceKind(str, Enum):
-    """What a resource is, which fixes the unit of its capacity/load.
-
-    human / ai -> capacity & load are measured in hours/day (derived from availability)
-    cpu / gpu  -> capacity & load are measured in parallel slots
-    """
-
     human = "human"
     ai = "ai"
     cpu = "cpu"
@@ -46,12 +40,10 @@ class Resource(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     kind: ResourceKind
-    # cpu/gpu: parallel slots (explicit). human/ai: None — derived from availability.
-    capacity: Optional[float] = Field(default=None)
-    # Human/AI availability: time window + day-of-week bitmask (bit 0=Mon … bit 6=Sun).
-    available_from: Optional[str] = Field(default=None)  # "HH:MM"
-    available_to: Optional[str] = Field(default=None)    # "HH:MM"
-    available_days: Optional[int] = Field(default=None)  # bitmask
+    # Availability window applies to all resource kinds; bit 0=Mon … bit 6=Sun.
+    available_from: str = Field(default="09:00")   # "HH:MM"
+    available_to: str = Field(default="17:00")     # "HH:MM"
+    available_days: int = Field(default=31)        # Mon-Fri bitmask
 
 
 class AppSettings(SQLModel, table=True):
@@ -70,11 +62,7 @@ class Task(SQLModel, table=True):
     # Stored as datetime for hour-precision scheduling.
     start_date: Optional[datetime] = Field(default=None)
     end_date: Optional[datetime] = Field(default=None)
-    # Units consumed per day while active, in the same unit as the
-    # assigned resource's capacity (human -> hours/day; compute -> slots).
-    load: float = Field(default=1.0)
-    # Total elapsed calendar duration in hours (informational, not used by engine).
-    duration: Optional[float] = Field(default=None)
+    duration: Optional[float] = Field(default=None)  # total hours (informational)
     # Execution fields — populated by the runner daemon.
     command:   Optional[str] = Field(default=None)  # shell command to execute
     exit_code: Optional[int] = Field(default=None)  # process exit code after completion

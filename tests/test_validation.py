@@ -57,7 +57,9 @@ def project_id_fixture(client):
 @pytest.fixture(name="resource_id")
 def resource_id_fixture(client):
     return client.post(
-        "/api/resources/", json={"name": "R", "kind": "gpu", "capacity": 4.0}
+        "/api/resources/", json={"name": "R", "kind": "gpu",
+                                 "available_from": "00:00", "available_to": "23:59",
+                                 "available_days": 127}
     ).json()["id"]
 
 
@@ -95,13 +97,8 @@ def _fuzz_requests(project_id, resource_id):
         ("GET", "/api/resources/0", None),
         ("GET", f"/api/tasks/?project_id={NEGATIVE_ID}", None),
         # --- non-finite numbers in bodies ---
-        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "capacity": INF}),
-        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "capacity": NAN}),
-        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "capacity": NEG_INF}),
-        ("PATCH", f"/api/resources/{resource_id}", {"capacity": INF}),
-        ("PATCH", f"/api/resources/{resource_id}", {"capacity": NAN}),
-        ("POST", "/api/tasks/", {"title": "x", "project_id": project_id, "load": INF}),
-        ("POST", "/api/tasks/", {"title": "x", "project_id": project_id, "load": NAN}),
+        ("POST", "/api/tasks/", {"title": "x", "project_id": project_id, "duration": INF}),
+        ("POST", "/api/tasks/", {"title": "x", "project_id": project_id, "duration": NAN}),
         # --- extreme / malformed date ranges ---
         (
             "GET",
@@ -125,10 +122,8 @@ def _fuzz_requests(project_id, resource_id):
         # --- empty / wrong-typed bodies ---
         ("POST", "/api/projects/", {"name": ""}),
         ("POST", "/api/projects/", {}),
-        ("POST", "/api/resources/", {"name": "x", "kind": "wizard", "capacity": 1}),
-        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "capacity": "lots"}),
-        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "capacity": -1}),
-        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "capacity": 0}),
+        ("POST", "/api/resources/", {"name": "x", "kind": "wizard"}),
+        ("POST", "/api/resources/", {"name": "x", "kind": "cpu", "available_from": "bad", "available_to": "17:00", "available_days": 31}),
         ("POST", "/api/tasks/", {"title": "x", "project_id": "not-an-int"}),
         ("POST", "/api/tasks/", {"title": "x", "project_id": project_id, "status": "??"}),
         (
@@ -197,25 +192,10 @@ def test_oversized_body_project_id_returns_422(client):
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("bad", [INF, NEG_INF, NAN])
-def test_non_finite_capacity_rejected(client, bad):
+def test_non_finite_duration_rejected(client, project_id, bad):
     resp = client.post(
-        "/api/resources/", json={"name": "x", "kind": "cpu", "capacity": bad}
+        "/api/tasks/", json={"title": "x", "project_id": project_id, "duration": bad}
     )
-    assert resp.status_code == 422
-    assert "detail" in resp.json()  # body parsed cleanly -> no serialization 500
-
-
-@pytest.mark.parametrize("bad", [INF, NEG_INF, NAN])
-def test_non_finite_load_rejected(client, project_id, bad):
-    resp = client.post(
-        "/api/tasks/", json={"title": "x", "project_id": project_id, "load": bad}
-    )
-    assert resp.status_code == 422
-    assert "detail" in resp.json()
-
-
-def test_non_finite_capacity_patch_rejected(client, resource_id):
-    resp = client.patch(f"/api/resources/{resource_id}", json={"capacity": NAN})
     assert resp.status_code == 422
     assert "detail" in resp.json()
 

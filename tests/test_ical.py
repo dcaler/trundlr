@@ -66,7 +66,6 @@ def test_ical_includes_scheduled_task(client):
         "resource_ids": [resource["id"]],
         "start_date": "2026-06-01T09:00:00",
         "end_date": "2026-06-03T17:00:00",
-        "load": 4.0,
     })
 
     resp = client.get(f"/api/resources/{resource['id']}/calendar.ics")
@@ -85,7 +84,6 @@ def test_ical_unscheduled_task_excluded(client):
         "title": "Not Yet Scheduled",
         "project_id": project["id"],
         "resource_ids": [resource["id"]],
-        "load": 1.0,
     })
 
     resp = client.get(f"/api/resources/{resource['id']}/calendar.ics")
@@ -108,7 +106,6 @@ def test_ical_task_without_end_date(client):
         "project_id": project["id"],
         "resource_ids": [resource["id"]],
         "start_date": "2026-06-01T09:00:00",
-        "load": 2.0,
     })
 
     resp = client.get(f"/api/resources/{resource['id']}/calendar.ics")

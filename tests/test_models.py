@@ -40,7 +40,6 @@ def test_create_each_entity_and_relationships(session):
     task = Task(
         title="Write spec",
         project_id=project.id,
-        load=4.0,
         start_date=date(2026, 6, 1),
         end_date=date(2026, 6, 5),
     )
@@ -63,9 +62,12 @@ def test_create_each_entity_and_relationships(session):
 
 
 def test_all_resource_kinds_persist(session):
-    human = Resource(name="Bob", kind=ResourceKind.human, capacity=8.0)
-    cpu = Resource(name="node-1", kind=ResourceKind.cpu, capacity=16.0)
-    gpu = Resource(name="dgx-1", kind=ResourceKind.gpu, capacity=4.0)
+    human = Resource(name="Bob", kind=ResourceKind.human,
+                     available_from="09:00", available_to="17:00", available_days=31)
+    cpu = Resource(name="node-1", kind=ResourceKind.cpu,
+                   available_from="00:00", available_to="23:59", available_days=127)
+    gpu = Resource(name="dgx-1", kind=ResourceKind.gpu,
+                   available_from="00:00", available_to="23:59", available_days=127)
     session.add_all([human, cpu, gpu])
     session.commit()
 
@@ -77,23 +79,19 @@ def test_all_resource_kinds_persist(session):
     }
 
 
-def test_unified_load_interface(session):
-    """A human task (hours/day) and a GPU task (slots) share one numeric
-    interface; the model stores both as plain floats."""
+def test_task_duration_is_optional(session):
+    """A task may store an optional duration (hours); it defaults to None."""
     project = Project(name="Shared")
-    human = Resource(name="Carol", kind=ResourceKind.human,
-                     available_from="09:00", available_to="17:00", available_days=31)
-    gpu = Resource(name="dgx-2", kind=ResourceKind.gpu, capacity=4.0)
-    session.add_all([project, human, gpu])
+    session.add(project)
     session.commit()
 
-    human_task = Task(title="Design", project_id=project.id, load=6.0)
-    gpu_task = Task(title="Train", project_id=project.id, load=2.0)
-    session.add_all([human_task, gpu_task])
+    no_dur = Task(title="Design", project_id=project.id)
+    with_dur = Task(title="Train", project_id=project.id, duration=8.0)
+    session.add_all([no_dur, with_dur])
     session.commit()
 
-    assert human_task.load == 6.0  # 6 hours/day
-    assert gpu_task.load == 2.0    # 2 of 4 slots
+    assert no_dur.duration is None
+    assert with_dur.duration == 8.0
 
 
 def test_task_requires_project(session):
