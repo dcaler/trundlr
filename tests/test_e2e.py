@@ -135,7 +135,7 @@ class TestFullScenario:
         resp = client.post("/api/tasks/", json={
             "title": "Data collection",
             "project_id": TestFullScenario._project_id,
-            "resource_id": TestFullScenario._alice_id,
+            "resource_ids": [TestFullScenario._alice_id],
             "start_date": "2026-06-01",
             "end_date": "2026-06-05",
             "load": 4.0,
@@ -143,7 +143,7 @@ class TestFullScenario:
         })
         assert resp.status_code == 201
         data = resp.json()
-        assert data["resource_id"] == TestFullScenario._alice_id
+        assert TestFullScenario._alice_id in data["resource_ids"]
         assert data["load"] == pytest.approx(4.0)
         TestFullScenario._task_data_id = data["id"]
 
@@ -151,7 +151,7 @@ class TestFullScenario:
         resp = client.post("/api/tasks/", json={
             "title": "Analysis",
             "project_id": TestFullScenario._project_id,
-            "resource_id": TestFullScenario._alice_id,
+            "resource_ids": [TestFullScenario._alice_id],
             "start_date": "2026-06-03",
             "end_date": "2026-06-05",  # Wed–Fri; stays on workdays
             "load": 4.0,
@@ -163,7 +163,7 @@ class TestFullScenario:
         resp = client.post("/api/tasks/", json={
             "title": "Model training A",
             "project_id": TestFullScenario._project_id,
-            "resource_id": TestFullScenario._gpu_id,
+            "resource_ids": [TestFullScenario._gpu_id],
             "start_date": "2026-06-01",
             "end_date": "2026-06-05",
             "load": 2.0,
@@ -175,7 +175,7 @@ class TestFullScenario:
         resp = client.post("/api/tasks/", json={
             "title": "Model training B",
             "project_id": TestFullScenario._project_id,
-            "resource_id": TestFullScenario._gpu_id,
+            "resource_ids": [TestFullScenario._gpu_id],
             "start_date": "2026-06-03",
             "end_date": "2026-06-07",
             "load": 2.0,
@@ -289,7 +289,7 @@ class TestFullScenario:
         resp = client.post("/api/tasks/", json={
             "title": "Emergency fix",
             "project_id": TestFullScenario._project_id,
-            "resource_id": TestFullScenario._alice_id,
+            "resource_ids": [TestFullScenario._alice_id],
             "start_date": "2026-06-04",
             "end_date": "2026-06-05",
             "load": 2.0,
@@ -332,7 +332,7 @@ class TestFullScenario:
         resp = client.post("/api/tasks/", json={
             "title": "Model eval",
             "project_id": TestFullScenario._project_id,
-            "resource_id": TestFullScenario._gpu_id,
+            "resource_ids": [TestFullScenario._gpu_id],
             "start_date": "2026-06-03",
             "end_date": "2026-06-05",
             "load": 1.0,
@@ -391,10 +391,10 @@ class TestFullScenario:
         """Unassign model eval → GPU conflict resolves on Jun 3-5."""
         resp = client.patch(
             f"/api/tasks/{TestFullScenario._task_eval_id}",
-            json={"resource_id": None},
+            json={"resource_ids": []},
         )
         assert resp.status_code == 200
-        assert resp.json()["resource_id"] is None
+        assert resp.json()["resource_ids"] == []
 
         conflicts_resp = client.get(
             f"/api/resources/{TestFullScenario._gpu_id}/conflicts",

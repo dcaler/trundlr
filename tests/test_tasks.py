@@ -62,7 +62,7 @@ def test_create_task_minimal(client, project_id):
     assert body["project_id"] == project_id
     assert body["status"] == "todo"
     assert body["load"] == 1.0
-    assert body["resource_id"] is None
+    assert body["resource_ids"] == []
 
 
 def test_create_task_with_resource_and_dates(client, project_id, resource_id):
@@ -71,7 +71,7 @@ def test_create_task_with_resource_and_dates(client, project_id, resource_id):
         json={
             "title": "Backend work",
             "project_id": project_id,
-            "resource_id": resource_id,
+            "resource_ids": [resource_id],
             "start_date": "2026-06-01",
             "end_date": "2026-06-30",
             "load": 6.0,
@@ -80,7 +80,7 @@ def test_create_task_with_resource_and_dates(client, project_id, resource_id):
     )
     assert resp.status_code == 201
     body = resp.json()
-    assert body["resource_id"] == resource_id
+    assert resource_id in body["resource_ids"]
     assert body["start_date"].startswith("2026-06-01")
     assert body["end_date"].startswith("2026-06-30")
     assert body["load"] == 6.0
@@ -141,8 +141,8 @@ def test_full_crud_round_trip(client, project_id, resource_id):
     ).json()
     tid = created["id"]
 
-    patched = client.patch(f"/api/tasks/{tid}", json={"resource_id": resource_id, "status": "in_progress"}).json()
-    assert patched["resource_id"] == resource_id
+    patched = client.patch(f"/api/tasks/{tid}", json={"resource_ids": [resource_id], "status": "in_progress"}).json()
+    assert resource_id in patched["resource_ids"]
     assert patched["status"] == "in_progress"
 
     assert client.delete(f"/api/tasks/{tid}").status_code == 204
@@ -153,19 +153,19 @@ def test_full_crud_round_trip(client, project_id, resource_id):
 
 def test_assign_resource(client, project_id, resource_id):
     task = client.post("/api/tasks/", json={"title": "T", "project_id": project_id}).json()
-    resp = client.patch(f"/api/tasks/{task['id']}", json={"resource_id": resource_id})
+    resp = client.patch(f"/api/tasks/{task['id']}", json={"resource_ids": [resource_id]})
     assert resp.status_code == 200
-    assert resp.json()["resource_id"] == resource_id
+    assert resource_id in resp.json()["resource_ids"]
 
 
 def test_unassign_resource(client, project_id, resource_id):
     task = client.post(
         "/api/tasks/",
-        json={"title": "T", "project_id": project_id, "resource_id": resource_id},
+        json={"title": "T", "project_id": project_id, "resource_ids": [resource_id]},
     ).json()
-    resp = client.patch(f"/api/tasks/{task['id']}", json={"resource_id": None})
+    resp = client.patch(f"/api/tasks/{task['id']}", json={"resource_ids": []})
     assert resp.status_code == 200
-    assert resp.json()["resource_id"] is None
+    assert resp.json()["resource_ids"] == []
 
 
 # --- date validation ---
@@ -219,14 +219,14 @@ def test_delete_missing_task(client):
 def test_create_task_nonexistent_resource(client, project_id):
     resp = client.post(
         "/api/tasks/",
-        json={"title": "T", "project_id": project_id, "resource_id": 9999},
+        json={"title": "T", "project_id": project_id, "resource_ids": [9999]},
     )
     assert resp.status_code == 404
 
 
 def test_patch_task_nonexistent_resource(client, project_id):
     task = client.post("/api/tasks/", json={"title": "T", "project_id": project_id}).json()
-    resp = client.patch(f"/api/tasks/{task['id']}", json={"resource_id": 9999})
+    resp = client.patch(f"/api/tasks/{task['id']}", json={"resource_ids": [9999]})
     assert resp.status_code == 404
 
 

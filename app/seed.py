@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 from sqlmodel import Session
 
-from app.models import Project, Resource, ResourceKind, Task, TaskStatus
+from app.models import Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
 
 
 def seed_data(session: Session) -> None:
@@ -24,9 +24,12 @@ def seed_data(session: Session) -> None:
     session.flush()  # Assign IDs without committing
 
     # Resources: humans
-    alice = Resource(name="Alice", kind=ResourceKind.human, capacity=8.0)
-    bob = Resource(name="Bob", kind=ResourceKind.human, capacity=8.0)
-    charlie = Resource(name="Charlie", kind=ResourceKind.human, capacity=8.0)
+    alice = Resource(name="Alice", kind=ResourceKind.human,
+                     available_from="09:00", available_to="17:00", available_days=31)
+    bob = Resource(name="Bob", kind=ResourceKind.human,
+                   available_from="09:00", available_to="17:00", available_days=31)
+    charlie = Resource(name="Charlie", kind=ResourceKind.human,
+                       available_from="09:00", available_to="17:00", available_days=31)
 
     # Resources: compute
     cpu_node = Resource(name="CPU Node 1", kind=ResourceKind.cpu, capacity=4.0)
@@ -50,7 +53,6 @@ def seed_data(session: Session) -> None:
         title="Design mockups",
         status=TaskStatus.in_progress,
         project_id=project_website.id,
-        resource_id=alice.id,
         load=6.0,
         start_date=today,
         end_date=next_week,
@@ -59,7 +61,6 @@ def seed_data(session: Session) -> None:
         title="Build frontend",
         status=TaskStatus.todo,
         project_id=project_website.id,
-        resource_id=bob.id,
         load=8.0,
         start_date=next_week,
         end_date=next_month,
@@ -70,7 +71,6 @@ def seed_data(session: Session) -> None:
         title="Data preparation",
         status=TaskStatus.in_progress,
         project_id=project_ml.id,
-        resource_id=charlie.id,
         load=4.0,
         start_date=today,
         end_date=next_week,
@@ -79,7 +79,6 @@ def seed_data(session: Session) -> None:
         title="Model training",
         status=TaskStatus.blocked,
         project_id=project_ml.id,
-        resource_id=gpu_node.id,
         load=2.0,
         start_date=next_week,
         end_date=next_month,
@@ -90,7 +89,6 @@ def seed_data(session: Session) -> None:
         title="Network optimization",
         status=TaskStatus.todo,
         project_id=project_infra.id,
-        resource_id=bob.id,
         load=5.0,
         start_date=tomorrow,
         end_date=next_week,
@@ -99,17 +97,21 @@ def seed_data(session: Session) -> None:
         title="Monitoring setup",
         status=TaskStatus.todo,
         project_id=project_infra.id,
-        resource_id=None,  # Unassigned
         load=3.0,
         start_date=next_week,
         end_date=next_month,
     )
 
-    session.add(task_design)
-    session.add(task_frontend)
-    session.add(task_data_prep)
-    session.add(task_training)
-    session.add(task_network)
-    session.add(task_monitoring)
+    session.add_all([task_design, task_frontend, task_data_prep,
+                     task_training, task_network, task_monitoring])
+    session.flush()
+
+    # Resource assignments via join table
+    session.add(TaskResource(task_id=task_design.id, resource_id=alice.id))
+    session.add(TaskResource(task_id=task_frontend.id, resource_id=bob.id))
+    session.add(TaskResource(task_id=task_data_prep.id, resource_id=charlie.id))
+    session.add(TaskResource(task_id=task_training.id, resource_id=gpu_node.id))
+    session.add(TaskResource(task_id=task_network.id, resource_id=bob.id))
+    # task_monitoring is intentionally unassigned
 
     session.commit()

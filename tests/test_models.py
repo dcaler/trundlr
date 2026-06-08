@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.models import Project, Resource, ResourceKind, Task, TaskStatus
+from app.models import Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
 
 
 @pytest.fixture
@@ -31,7 +31,8 @@ def session():
 
 def test_create_each_entity_and_relationships(session):
     project = Project(name="Apollo")
-    resource = Resource(name="Alice", kind=ResourceKind.human, capacity=8.0)
+    resource = Resource(name="Alice", kind=ResourceKind.human,
+                        available_from="09:00", available_to="17:00", available_days=31)
     session.add(project)
     session.add(resource)
     session.commit()
@@ -39,20 +40,24 @@ def test_create_each_entity_and_relationships(session):
     task = Task(
         title="Write spec",
         project_id=project.id,
-        resource_id=resource.id,
         load=4.0,
         start_date=date(2026, 6, 1),
         end_date=date(2026, 6, 5),
     )
     session.add(task)
+    session.flush()
+    session.add(TaskResource(task_id=task.id, resource_id=resource.id))
     session.commit()
     session.refresh(task)
 
-    # Relationships resolve in both directions.
+    # Project relationship resolves.
     assert task.project is project
-    assert task.resource is resource
     assert project.tasks == [task]
-    assert resource.tasks == [task]
+    # Resource assignment exists in join table.
+    from sqlmodel import select
+    tr = session.exec(select(TaskResource).where(TaskResource.task_id == task.id)).first()
+    assert tr is not None
+    assert tr.resource_id == resource.id
     # Status defaults to todo.
     assert task.status == TaskStatus.todo
 
@@ -76,13 +81,14 @@ def test_unified_load_interface(session):
     """A human task (hours/day) and a GPU task (slots) share one numeric
     interface; the model stores both as plain floats."""
     project = Project(name="Shared")
-    human = Resource(name="Carol", kind=ResourceKind.human, capacity=8.0)
+    human = Resource(name="Carol", kind=ResourceKind.human,
+                     available_from="09:00", available_to="17:00", available_days=31)
     gpu = Resource(name="dgx-2", kind=ResourceKind.gpu, capacity=4.0)
     session.add_all([project, human, gpu])
     session.commit()
 
-    human_task = Task(title="Design", project_id=project.id, resource_id=human.id, load=6.0)
-    gpu_task = Task(title="Train", project_id=project.id, resource_id=gpu.id, load=2.0)
+    human_task = Task(title="Design", project_id=project.id, load=6.0)
+    gpu_task = Task(title="Train", project_id=project.id, load=2.0)
     session.add_all([human_task, gpu_task])
     session.commit()
 
@@ -117,5 +123,6 @@ def test_task_resource_is_optional(session):
     session.commit()
     session.refresh(unassigned)
 
-    assert unassigned.resource_id is None
-    assert unassigned.resource is None
+    from sqlmodel import select
+    tr = session.exec(select(TaskResource).where(TaskResource.task_id == unassigned.id)).first()
+    assert tr is None

@@ -48,7 +48,7 @@ def mk_resource(c, name, kind, cap=None):
     return c.post("/api/resources/", json=body).json()
 def mk_task(c, proj_id, res_id, start, end, load, title="T"):
     return c.post("/api/tasks/", json={
-        "title": title, "project_id": proj_id, "resource_id": res_id,
+        "title": title, "project_id": proj_id, "resource_ids": [res_id],
         "start_date": start, "end_date": end, "load": load,
     }).json()
 

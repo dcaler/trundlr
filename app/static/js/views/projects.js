@@ -254,7 +254,7 @@ async function showProjectsList(el, editingId = null) {
   );
 }
 
-async function showProjectDetail(el, projectId, editingTaskId = null) {
+async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
   const [project, tasks, resources] = await Promise.all([
     api.get(`/projects/${projectId}`),
@@ -396,6 +396,8 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
         </table>`}
   `;
 
+  if (scrollY !== null) requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'instant' }));
+
   el.querySelector('.back-btn').addEventListener('click', () => showProjectsList(el));
 
   const addForm = el.querySelector('#add-task-form');
@@ -427,7 +429,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
   });
 
   el.querySelectorAll('.edit-task-btn').forEach(btn =>
-    btn.addEventListener('click', () => showProjectDetail(el, projectId, parseInt(btn.dataset.id)))
+    btn.addEventListener('click', () => showProjectDetail(el, projectId, parseInt(btn.dataset.id), window.scrollY))
   );
 
   const editTaskForm = el.querySelector('.edit-task-form');
@@ -457,7 +459,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null) {
       } catch (err) { alert(`Error: ${err.message}`); }
     });
     el.querySelector('.cancel-task-edit').addEventListener('click',
-      () => showProjectDetail(el, projectId)
+      () => showProjectDetail(el, projectId, null, window.scrollY)
     );
   }
 

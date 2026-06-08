@@ -2,7 +2,50 @@
 
 const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
 
-// ── Date helpers (timezone-safe via Date.UTC) ─────────────────────────────
+// ── Re-align: sort tasks by project priority per resource, sequential start times ─
+
+async function realignSchedule(resources, tasks, projects) {
+  const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
+  const patchMap = new Map();
+
+  for (const resource of resources) {
+    const resTasks = tasks
+      .filter(t => (t.resource_ids || []).includes(resource.id) && t.start_date && t.end_date && !patchMap.has(t.id))
+      .sort((a, b) => {
+        const pa = priorityByProject[a.project_id] || 3;
+        const pb = priorityByProject[b.project_id] || 3;
+        if (pa !== pb) return pa - pb;
+        return new Date(a.start_date) - new Date(b.start_date);
+      });
+
+    if (!resTasks.length) continue;
+
+    const anchor = Math.min(...resTasks.map(t => new Date(t.start_date).getTime()));
+    let cursor = anchor;
+
+    for (const task of resTasks) {
+      const origStart = new Date(task.start_date).getTime();
+      const dur = new Date(task.end_date).getTime() - origStart;
+      if (cursor !== origStart) {
+        const fmt = ms => {
+          const d = new Date(ms);
+          const p = n => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+        };
+        patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
+      }
+      cursor += dur;
+    }
+  }
+
+  if (!patchMap.size) return 0;
+  await Promise.all([...patchMap.entries()].map(([id, { start, end }]) =>
+    api.patch(`/tasks/${id}`, { start_date: start, end_date: end })
+  ));
+  return patchMap.size;
+}
+
+// ── Date helpers ──────────────────────────────────────────────────────────
 
 function schedTodayStr() {
   const d = new Date();
@@ -77,7 +120,8 @@ function buildHourlyHeader(dates, today) {
 // Returns {left, width} in px, or null if the task is outside the range.
 function ganttBarPosition(task, fromDate, toDate) {
   if (!task.start_date) return null;
-  const rangeStartMs = Date.UTC(...fromDate.split('-').map(Number).map((v, i) => i === 1 ? v - 1 : v));
+  const [fy, fm, fd] = fromDate.split('-').map(Number);
+  const rangeStartMs = new Date(fy, fm - 1, fd).getTime(); // local midnight, consistent with task datetimes
   const rangeEndMs   = rangeStartMs + (schedDaysBetween(fromDate, toDate) + 1) * 86400000;
   const taskStartMs  = new Date(task.start_date).getTime();
   const taskEndMs    = task.end_date ? new Date(task.end_date).getTime() : rangeEndMs;
@@ -108,7 +152,7 @@ function assignLanes(bars) {
 
 // Build all bar HTML for a set of tasks, with lane stacking for overlaps.
 // Returns {html, trackHeight} where trackHeight accommodates all lanes.
-function buildGanttBarsHtml(tasks, fromDate, toDate, priorityByProject = {}) {
+function buildGanttBarsHtml(tasks, fromDate, toDate, priorityByProject = {}, projectById = {}) {
   const bars = [];
   for (const task of tasks) {
     const pos = ganttBarPosition(task, fromDate, toDate);
@@ -127,20 +171,22 @@ function buildGanttBarsHtml(tasks, fromDate, toDate, priorityByProject = {}) {
     const top        = GANTT_LANE_PAD + lane * GANTT_LANE_H;
     const startLabel = task.start_date.replace('T', ' ').slice(0, 16);
     const endLabel   = task.end_date ? task.end_date.replace('T', ' ').slice(0, 16) : '∞';
-    const descLine   = task.description ? `\n${escHtml(task.description)}` : '';
+    const projectName = projectById[task.project_id]?.name;
+    const projectLine = projectName ? `\n${escHtml(projectName)}` : '';
+    const descLine    = task.description ? `\n${escHtml(task.description)}` : '';
     const priorityCls = priority ? ` bar-p${priority}` : '';
     return `<div class="gantt-bar bar-${escHtml(task.status)}${priorityCls}"
                  style="left:${left}px;width:${width}px;top:${top}px"
-                 title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}${descLine}"
+                 title="${escHtml(task.title)} [${escHtml(task.status.replace('_', ' '))}]\n${startLabel} → ${endLabel}${projectLine}${descLine}"
             >${escHtml(task.title)}</div>`;
   }).join('');
 
   return { html, trackHeight };
 }
 
-function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours, priorityByProject = {}) {
+function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHours, priorityByProject = {}, projectById = {}) {
   const resTasks = tasks.filter(t => (t.resource_ids || []).includes(resource.id));
-  const { html: bars, trackHeight } = buildGanttBarsHtml(resTasks, fromDate, toDate, priorityByProject);
+  const { html: bars, trackHeight } = buildGanttBarsHtml(resTasks, fromDate, toDate, priorityByProject, projectById);
   const totalW = totalHours * SCHED_HOUR_WIDTH;
   const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
   return `<tr>
@@ -151,10 +197,10 @@ function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHou
   </tr>`;
 }
 
-function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours, priorityByProject = {}) {
+function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours, priorityByProject = {}, projectById = {}) {
   const unassigned = tasks.filter(t => !(t.resource_ids || []).length && t.start_date);
   if (!unassigned.length) return '';
-  const { html: bars, trackHeight } = buildGanttBarsHtml(unassigned, fromDate, toDate, priorityByProject);
+  const { html: bars, trackHeight } = buildGanttBarsHtml(unassigned, fromDate, toDate, priorityByProject, projectById);
   const totalW = totalHours * SCHED_HOUR_WIDTH;
   const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
   return `<tr>
@@ -351,13 +397,14 @@ async function showSchedule(el) {
     }
 
     const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
+    const projectById       = Object.fromEntries(projects.map(p => [p.id, p]));
 
     const dates      = schedGenerateDates(from, to);
     const totalHours = dates.length * 24;
     const thead      = buildHourlyHeader(dates, today);
     const tbody = [
-      ...resources.map(r => buildGanttResourceRowHourly(r, tasks, from, to, totalHours, priorityByProject)),
-      buildUnassignedRowHourly(tasks, from, to, totalHours, priorityByProject),
+      ...resources.map(r => buildGanttResourceRowHourly(r, tasks, from, to, totalHours, priorityByProject, projectById)),
+      buildUnassignedRowHourly(tasks, from, to, totalHours, priorityByProject, projectById),
     ].join('');
 
     body.innerHTML = `
@@ -366,7 +413,10 @@ async function showSchedule(el) {
         <span class="gantt-legend-item"><span class="gantt-swatch bar-in_progress"></span>In progress</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-blocked"></span>Blocked</span>
         <span class="gantt-legend-item"><span class="gantt-swatch bar-done"></span>Done</span>
-        <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Today highlighted blue · hover bar for times</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:0.75rem">
+          <button id="btn-realign" class="btn btn-ghost" style="font-size:0.75rem;padding:0.2rem 0.5rem">↺ Re-align</button>
+          <span style="color:var(--text-muted);font-size:0.75rem">Today highlighted blue · hover bar for times</span>
+        </span>
       </div>
       <div class="gantt-scroll-wrapper">
         <table class="gantt-table">
@@ -374,6 +424,26 @@ async function showSchedule(el) {
           <tbody>${tbody}</tbody>
         </table>
       </div>`;
+
+    body.querySelector('#btn-realign').addEventListener('click', async () => {
+      const btn = body.querySelector('#btn-realign');
+      btn.disabled = true;
+      btn.textContent = 'Re-aligning…';
+      try {
+        const count = await realignSchedule(resources, tasks, projects);
+        if (count === 0) {
+          alert('Tasks are already in priority order — no changes needed.');
+          btn.disabled = false;
+          btn.textContent = '↺ Re-align';
+        } else {
+          await render();
+        }
+      } catch (err) {
+        alert(`Re-align failed: ${err.message}`);
+        btn.disabled = false;
+        btn.textContent = '↺ Re-align';
+      }
+    });
   }
 
   async function renderUtilization(gen, to) {
