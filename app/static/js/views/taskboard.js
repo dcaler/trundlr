@@ -16,25 +16,32 @@ async function showTaskBoard(el, showCompleted = false) {
     api.get('/resources/'),
   ]);
 
-  const byProject        = Object.fromEntries(projects.map(p => [p.id, p.name]));
+  const byProject         = Object.fromEntries(projects.map(p => [p.id, p.name]));
   const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
-  const byResource       = Object.fromEntries(resources.map(r => [r.id, r.name]));
+  const byResource        = Object.fromEntries(resources.map(r => [r.id, r.name]));
+  const taskById          = Object.fromEntries(tasks.map(t => [t.id, t]));
 
   const visible = showCompleted ? tasks : tasks.filter(t => t.status !== 'done');
-  // Primary sort: start_date (nulls last). Secondary: project priority (1=highest).
-  visible.sort((a, b) =>
-    taskSortKey(a) - taskSortKey(b) ||
-    (priorityByProject[a.project_id] || 3) - (priorityByProject[b.project_id] || 3)
-  );
+  // Blocked tasks always go to the bottom; within groups sort by start_date then priority.
+  visible.sort((a, b) => {
+    const aBlocked = a.status === 'blocked' ? 1 : 0;
+    const bBlocked = b.status === 'blocked' ? 1 : 0;
+    if (aBlocked !== bBlocked) return aBlocked - bBlocked;
+    return taskSortKey(a) - taskSortKey(b) ||
+      (priorityByProject[a.project_id] || 3) - (priorityByProject[b.project_id] || 3);
+  });
 
   const rows = visible.map(t => {
     const done = t.status === 'done';
-    const rowStyle = done
-      ? 'opacity:0.5;text-decoration:line-through'
-      : '';
+    const rowStyle = done ? 'opacity:0.5;text-decoration:line-through' : '';
     const statusOpts = STATUS_ORDER.map(s =>
       `<option value="${s}"${t.status === s ? ' selected' : ''}>${escHtml(s.replace('_', ' '))}</option>`
     ).join('');
+
+    const dep = t.depends_on_id ? taskById[t.depends_on_id] : null;
+    const depHtml = dep
+      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
+      : '';
 
     return `<tr style="${rowStyle}" data-id="${t.id}">
       <td>
@@ -42,7 +49,7 @@ async function showTaskBoard(el, showCompleted = false) {
           ${statusOpts}
         </select>
       </td>
-      <td>${escHtml(t.title)}</td>
+      <td>${escHtml(t.title)}${depHtml}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${priorityBadge(priorityByProject[t.project_id])}${escHtml(byProject[t.project_id] || '—')}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${escHtml((t.resource_ids || []).map(id => byResource[id]).filter(Boolean).join(', ') || '—')}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
