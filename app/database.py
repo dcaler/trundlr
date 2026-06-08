@@ -127,6 +127,47 @@ def apply_migrations(engine):
             ))
         conn.commit()
 
+        # The old schema had `load FLOAT NOT NULL` on task. The model no longer
+        # has this field, so SQLAlchemy's INSERTs omit it and SQLite raises
+        # "NOT NULL constraint failed". Drop it via table recreation (safer than
+        # ALTER TABLE DROP COLUMN which requires SQLite ≥ 3.35 and may not be
+        # available in all Docker base images).
+        result = conn.execute(text("PRAGMA table_info(task)"))
+        task_info = list(result)
+        load_col = next((r for r in task_info if r[1] == 'load'), None)
+        if load_col is not None:
+            existing = {r[1] for r in task_info}
+            keep = [c for c in [
+                'id', 'title', 'description', 'status', 'start_date', 'end_date',
+                'duration', 'command', 'exit_code', 'log_tail', 'project_id', 'depends_on_id',
+            ] if c in existing]
+            cols = ', '.join(keep)
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(text("DROP TABLE IF EXISTS task_new"))
+            conn.execute(text("""
+                CREATE TABLE task_new (
+                    id            INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    title         VARCHAR NOT NULL,
+                    description   TEXT,
+                    status        VARCHAR(11) NOT NULL,
+                    start_date    DATE,
+                    end_date      DATE,
+                    duration      REAL,
+                    command       TEXT,
+                    exit_code     INTEGER,
+                    log_tail      TEXT,
+                    project_id    INTEGER NOT NULL REFERENCES project(id),
+                    depends_on_id INTEGER REFERENCES task(id)
+                )
+            """))
+            conn.execute(text(f"INSERT INTO task_new ({cols}) SELECT {cols} FROM task"))
+            conn.execute(text("DROP TABLE task"))
+            conn.execute(text("ALTER TABLE task_new RENAME TO task"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_project_id ON task (project_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_depends_on_id ON task (depends_on_id)"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.commit()
+
         # Migrate task.resource_id → taskresource join table (idempotent via INSERT OR IGNORE).
         # The taskresource table is created by create_db_and_tables; this only copies data
         # from the old single-resource FK column on DBs that pre-date multi-resource support.

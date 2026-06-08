@@ -57,7 +57,14 @@ async function realignSchedule(resources, tasks, projects) {
       .filter(t => onResource(t) && t.status !== 'todo' && t.status !== 'blocked')
       .reduce((mx, t) => Math.max(mx, new Date(t.end_date || t.start_date).getTime()), 0);
 
-    let cursor = Math.max(fixedEnd, Date.now());
+    // Also account for tasks already re-scheduled by earlier resource iterations
+    // that are assigned to this resource too — without this, two resources that
+    // share a task would get tasks scheduled concurrently on the shared resource.
+    const patchedEnd = tasks
+      .filter(t => onResource(t) && patchMap.has(t.id))
+      .reduce((mx, t) => Math.max(mx, new Date(patchMap.get(t.id).end).getTime()), 0);
+
+    let cursor = Math.max(fixedEnd, patchedEnd, Date.now());
 
     const fmt = ms => {
       const d = new Date(ms);
