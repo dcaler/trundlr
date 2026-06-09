@@ -2,8 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import nullslast, or_
-from sqlalchemy.orm import aliased
+from sqlalchemy import nullslast
 from sqlmodel import Session, select
 
 from app.database import get_db
@@ -51,17 +50,14 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     if already_running:
         return Response(status_code=204)
 
-    DepTask = aliased(Task)
     stmt = (
         select(Task)
         .join(TaskResource, Task.id == TaskResource.task_id)
         .join(Project, Task.project_id == Project.id)
-        .outerjoin(DepTask, Task.depends_on_id == DepTask.id)
         .where(TaskResource.resource_id == resource_id)
         .where(Task.status == TaskStatus.todo)
         .where(Task.command.isnot(None))
         .where(Task.command != "")
-        .where(or_(Task.depends_on_id.is_(None), DepTask.status == TaskStatus.done))
         .order_by(Project.priority, nullslast(Task.start_date))
         .limit(1)
     )
@@ -69,6 +65,13 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
 
     if task is None:
         return Response(status_code=204)
+
+    # The runner runs tasks strictly in queue order — it never skips.
+    # If the next task has an unmet dependency, wait until it is satisfied.
+    if task.depends_on_id is not None:
+        dep = session.get(Task, task.depends_on_id)
+        if dep is None or dep.status != TaskStatus.done:
+            return Response(status_code=204)
 
     now = _now_naive(session)
     task.status = TaskStatus.in_progress
