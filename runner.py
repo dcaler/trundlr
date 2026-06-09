@@ -168,20 +168,26 @@ def main() -> None:
     except Exception as e:
         _log(f"Warning: reset-stale failed: {e}")
 
+    last_idle: str = ""
     while not _shutdown:
         # ── Claim next task ────────────────────────────────────────────────
         try:
             task, idle_reason = _api(base_url, "POST", f"/runner/{resource_id}/claim")
         except Exception as e:
-            _log(f"Claim error: {e} — retrying in {poll_interval}s")
+            if str(e) != last_idle:
+                _log(f"Claim error: {e} — retrying in {poll_interval}s")
+                last_idle = str(e)
             time.sleep(poll_interval)
             continue
 
         if task is None:
-            if idle_reason:
-                _log(f"Idle: {idle_reason} — retrying in {poll_interval}s")
+            if idle_reason and idle_reason != last_idle:
+                _log(f"Idle: {idle_reason}")
+                last_idle = idle_reason
             time.sleep(poll_interval)
             continue
+
+        last_idle = ""
 
         task_id = task["id"]
         command = task.get("command") or ""
