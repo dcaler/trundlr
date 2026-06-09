@@ -64,14 +64,17 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     task = session.exec(stmt).first()
 
     if task is None:
-        return Response(status_code=204)
+        return Response(status_code=204, headers={"X-Runner-Idle": "empty-queue"})
 
     # The runner runs tasks strictly in queue order — it never skips.
     # If the next task has an unmet dependency, wait until it is satisfied.
     if task.depends_on_id is not None:
         dep = session.get(Task, task.depends_on_id)
-        if dep is None or dep.status != TaskStatus.done:
-            return Response(status_code=204)
+        if dep is not None and dep.status != TaskStatus.done:
+            return Response(
+                status_code=204,
+                headers={"X-Runner-Idle": f"waiting-dep:{task.id}:{dep.id}:{dep.status}"},
+            )
 
     now = _now_naive(session)
     task.status = TaskStatus.in_progress

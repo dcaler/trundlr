@@ -53,7 +53,8 @@ def _on_signal(sig, frame):
 
 
 def _api(base_url: str, method: str, path: str, body=None):
-    """Make a JSON API request. Returns parsed response body, or None for 204."""
+    """Make a JSON API request. Returns (parsed body, idle_reason) where idle_reason
+    is set when the server returns 204 with an X-Runner-Idle header."""
     url = f"{base_url.rstrip('/')}/api{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
@@ -65,8 +66,8 @@ def _api(base_url: str, method: str, path: str, body=None):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             if resp.status == 204:
-                return None
-            return json.loads(resp.read())
+                return None, resp.headers.get("X-Runner-Idle", "")
+            return json.loads(resp.read()), None
     except urllib.error.HTTPError as e:
         body_text = e.read().decode(errors="replace")
         raise RuntimeError(f"API {method} {path} → HTTP {e.code}: {body_text}") from e
@@ -146,7 +147,7 @@ def main() -> None:
     # Resolve server timezone so timestamps match what the server stores.
     server_tz = timezone.utc
     try:
-        settings = _api(base_url, "GET", "/settings")
+        settings, _ = _api(base_url, "GET", "/settings")
         if settings and settings.get("timezone"):
             from zoneinfo import ZoneInfo
             server_tz = ZoneInfo(settings["timezone"])
@@ -161,7 +162,7 @@ def main() -> None:
 
     # Reset tasks left in_progress by a previous crashed run.
     try:
-        result = _api(base_url, "POST", f"/runner/{resource_id}/reset-stale")
+        result, _ = _api(base_url, "POST", f"/runner/{resource_id}/reset-stale")
         if result and result.get("reset"):
             _log(f"Reset {result['reset']} stale task(s) to failed")
     except Exception as e:
@@ -170,13 +171,15 @@ def main() -> None:
     while not _shutdown:
         # ── Claim next task ────────────────────────────────────────────────
         try:
-            task = _api(base_url, "POST", f"/runner/{resource_id}/claim")
+            task, idle_reason = _api(base_url, "POST", f"/runner/{resource_id}/claim")
         except Exception as e:
             _log(f"Claim error: {e} — retrying in {poll_interval}s")
             time.sleep(poll_interval)
             continue
 
         if task is None:
+            if idle_reason:
+                _log(f"Idle: {idle_reason} — retrying in {poll_interval}s")
             time.sleep(poll_interval)
             continue
 
