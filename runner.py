@@ -41,9 +41,14 @@ from pathlib import Path
 _shutdown = False
 
 
+def _log(msg: str) -> None:
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{ts} [runner] {msg}", flush=True)
+
+
 def _on_signal(sig, frame):
     global _shutdown
-    print(f"[runner] Signal {sig} — will stop after the current task completes", flush=True)
+    _log(f"Signal {sig} — will stop after the current task completes")
     _shutdown = True
 
 
@@ -146,29 +151,28 @@ def main() -> None:
             from zoneinfo import ZoneInfo
             server_tz = ZoneInfo(settings["timezone"])
     except Exception as e:
-        print(f"[runner] Warning: could not fetch server timezone ({e}); falling back to UTC", flush=True)
+        _log(f"Warning: could not fetch server timezone ({e}); falling back to UTC")
 
-    print(
-        f"[runner] Starting  resource_id={resource_id}  api={base_url}"
+    _log(
+        f"Starting  resource_id={resource_id}  api={base_url}"
         f"  tz={server_tz}  poll={poll_interval}s  log_tail={log_tail_lines} lines"
-        f"  log_dir={log_dir}",
-        flush=True,
+        f"  log_dir={log_dir}"
     )
 
     # Reset tasks left in_progress by a previous crashed run.
     try:
         result = _api(base_url, "POST", f"/runner/{resource_id}/reset-stale")
         if result and result.get("reset"):
-            print(f"[runner] Reset {result['reset']} stale task(s) to failed", flush=True)
+            _log(f"Reset {result['reset']} stale task(s) to failed")
     except Exception as e:
-        print(f"[runner] Warning: reset-stale failed: {e}", flush=True)
+        _log(f"Warning: reset-stale failed: {e}")
 
     while not _shutdown:
         # ── Claim next task ────────────────────────────────────────────────
         try:
             task = _api(base_url, "POST", f"/runner/{resource_id}/claim")
         except Exception as e:
-            print(f"[runner] Claim error: {e} — retrying in {poll_interval}s", flush=True)
+            _log(f"Claim error: {e} — retrying in {poll_interval}s")
             time.sleep(poll_interval)
             continue
 
@@ -181,14 +185,14 @@ def main() -> None:
         raw_dir = task.get("project_directory")
         log_file = log_dir / f"task-{task_id}.log"
 
-        print(f"[runner] Task {task_id}: {task['title']!r}", flush=True)
+        _log(f"Task {task_id}: {task['title']!r}")
 
         if not command:
-            print(f"[runner] Task {task_id} has no command — marking done", flush=True)
+            _log(f"Task {task_id} has no command — marking done")
             try:
                 _api(base_url, "PATCH", f"/tasks/{task_id}", {"status": "done", "exit_code": 0})
             except Exception as e:
-                print(f"[runner] Warning: PATCH failed: {e}", flush=True)
+                _log(f"Warning: PATCH failed: {e}")
             continue
 
         # ── Validate the working directory ─────────────────────────────────
@@ -199,7 +203,7 @@ def main() -> None:
         # so a missing/relative/label-only value is refused, not executed.
         project_dir, refusal = _resolve_workdir(raw_dir)
         if refusal:
-            print(f"[runner] Task {task_id} REFUSED — {refusal}", flush=True)
+            _log(f"Task {task_id} REFUSED — {refusal}")
             try:
                 _api(base_url, "PATCH", f"/tasks/{task_id}", {
                     "status": "failed",
@@ -210,11 +214,11 @@ def main() -> None:
                     ),
                 })
             except Exception as e:
-                print(f"[runner] Warning: PATCH failed: {e}", flush=True)
+                _log(f"Warning: PATCH failed: {e}")
             continue
 
         # ── Execute ────────────────────────────────────────────────────────
-        print(f"[runner] Running: {command!r}  cwd={project_dir!r}  log={log_file}", flush=True)
+        _log(f"Task {task_id} running: {command!r}  cwd={project_dir!r}  log={log_file}")
         actual_start = datetime.now(server_tz)
         exit_code = -1
 
@@ -231,7 +235,7 @@ def main() -> None:
             proc.wait()
             exit_code = proc.returncode
         except Exception as e:
-            print(f"[runner] Task {task_id} launch error: {e}", flush=True)
+            _log(f"Task {task_id} launch error: {e}")
             try:
                 _api(base_url, "PATCH", f"/tasks/{task_id}", {
                     "status": "failed",
@@ -239,7 +243,7 @@ def main() -> None:
                     "log_tail": str(e),
                 })
             except Exception as patch_err:
-                print(f"[runner] Warning: PATCH failed: {patch_err}", flush=True)
+                _log(f"Warning: PATCH failed: {patch_err}")
             continue
 
         actual_end = datetime.now(server_tz)
@@ -247,11 +251,7 @@ def main() -> None:
         status = "done" if exit_code == 0 else "failed"
         tail = _tail(log_file, log_tail_lines)
 
-        print(
-            f"[runner] Task {task_id} → {status}  exit={exit_code}"
-            f"  duration={duration_h:.3f}h",
-            flush=True,
-        )
+        _log(f"Task {task_id} → {status}  exit={exit_code}  duration={duration_h:.3f}h")
 
         # ── Write results back ─────────────────────────────────────────────
         try:
@@ -263,7 +263,7 @@ def main() -> None:
                 "log_tail": tail,
             })
         except Exception as e:
-            print(f"[runner] Warning: PATCH failed: {e}", flush=True)
+            _log(f"Warning: PATCH failed: {e}")
 
         # No sleep — immediately check for the next task.
 
