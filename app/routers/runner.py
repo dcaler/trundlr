@@ -50,24 +50,21 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     if already_running:
         return Response(status_code=204)
 
-    stmt = (
+    task = session.exec(
         select(Task)
         .join(TaskResource, Task.id == TaskResource.task_id)
-        .join(Project, Task.project_id == Project.id)
         .where(TaskResource.resource_id == resource_id)
         .where(Task.status == TaskStatus.todo)
         .where(Task.command.isnot(None))
         .where(Task.command != "")
-        .order_by(Project.priority, nullslast(Task.start_date))
+        .order_by(nullslast(Task.start_date))
         .limit(1)
-    )
-    task = session.exec(stmt).first()
+    ).first()
 
     if task is None:
         return Response(status_code=204, headers={"X-Runner-Idle": "empty-queue"})
 
-    # The runner runs tasks strictly in queue order — it never skips.
-    # If the next task has an unmet dependency, wait until it is satisfied.
+    # If the next task's dependency isn't done yet, wait — never skip ahead.
     if task.depends_on_id is not None:
         dep = session.get(Task, task.depends_on_id)
         if dep is not None and dep.status != TaskStatus.done:
