@@ -138,9 +138,19 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
+    # Resolve server timezone so timestamps match what the server stores.
+    server_tz = timezone.utc
+    try:
+        settings = _api(base_url, "GET", "/settings")
+        if settings and settings.get("timezone"):
+            from zoneinfo import ZoneInfo
+            server_tz = ZoneInfo(settings["timezone"])
+    except Exception as e:
+        print(f"[runner] Warning: could not fetch server timezone ({e}); falling back to UTC", flush=True)
+
     print(
         f"[runner] Starting  resource_id={resource_id}  api={base_url}"
-        f"  poll={poll_interval}s  log_tail={log_tail_lines} lines"
+        f"  tz={server_tz}  poll={poll_interval}s  log_tail={log_tail_lines} lines"
         f"  log_dir={log_dir}",
         flush=True,
     )
@@ -205,7 +215,7 @@ def main() -> None:
 
         # ── Execute ────────────────────────────────────────────────────────
         print(f"[runner] Running: {command!r}  cwd={project_dir!r}  log={log_file}", flush=True)
-        actual_start = datetime.now(timezone.utc)
+        actual_start = datetime.now(server_tz)
         exit_code = -1
 
         try:
@@ -232,7 +242,7 @@ def main() -> None:
                 print(f"[runner] Warning: PATCH failed: {patch_err}", flush=True)
             continue
 
-        actual_end = datetime.now(timezone.utc)
+        actual_end = datetime.now(server_tz)
         duration_h = (actual_end - actual_start).total_seconds() / 3600
         status = "done" if exit_code == 0 else "failed"
         tail = _tail(log_file, log_tail_lines)
