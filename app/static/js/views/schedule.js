@@ -93,14 +93,15 @@ async function realignSchedule(resources, tasks, projects) {
     blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
   } catch (_) {}
 
-  // Advance cursor past any pinned task whose time slot it would overlap.
-  // Loops because skipping one slot may land inside another.
-  const skipPinned = (ms, slots) => {
+  // Advance cursor so a task of `dur` ms starting at `ms` doesn't overlap any pinned slot.
+  // Uses overlap test [c, c+dur) ∩ [s.start, s.end) — loops because pushing past one slot
+  // may land inside another.
+  const skipPinned = (ms, dur, slots) => {
     let c = ms, changed = true;
     while (changed) {
       changed = false;
       for (const s of slots) {
-        if (c < s.end && c > s.start - 1) { c = s.end; changed = true; }
+        if (c < s.end && c + dur > s.start) { c = s.end; changed = true; }
       }
     }
     return c;
@@ -170,15 +171,20 @@ async function realignSchedule(resources, tasks, projects) {
 
       if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
 
-      cursor = nextSlotInWindow(cursor, resource, blockouts);
-      cursor = skipPinned(cursor, pinnedSlots);
-      // Fit-to-window only makes sense for resources with bounded working hours
-      // (human/ai).  CPU/GPU run 24/7 — pushing to midnight creates false gaps.
+      // Advance past window gaps and pinned slots, iterating until stable —
+      // skipping a pinned slot may push cursor outside the availability window.
+      for (let adj = 0; adj < 100; adj++) {
+        const before = cursor;
+        cursor = nextSlotInWindow(cursor, resource, blockouts);
+        cursor = skipPinned(cursor, dur, pinnedSlots);
+        if (cursor === before) break;
+      }
+      // Fit-to-window: don't split a task across a day boundary (human/ai only).
       if (resource.kind === 'human' || resource.kind === 'ai') {
         const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
         if (cursor + dur > wE && cursor > wS) {
           cursor = nextSlotInWindow(wE, resource, blockouts);
-          cursor = skipPinned(cursor, pinnedSlots);
+          cursor = skipPinned(cursor, dur, pinnedSlots);
         }
       }
 
