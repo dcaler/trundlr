@@ -111,13 +111,17 @@ async function realignSchedule(resources, tasks, projects) {
     const onResource = t => (t.resource_ids || []).includes(resource.id);
     const blockouts  = blockoutsByResource[resource.id] || [];
 
-    // Pinned todo tasks keep their existing dates; record them in patchMap so
-    // dependency resolution uses their times, and build obstacle list.
+    // Pinned todo tasks keep their existing dates.
+    // Build obstacle list from ALL pinned tasks on this resource — regardless of
+    // whether they were already added to patchMap by an earlier resource iteration
+    // (a pinned task shared across resources must block every resource's queue).
     const pinnedTasks = tasks.filter(t =>
-      onResource(t) && t.status === 'todo' && t.pinned && t.start_date && t.end_date && !patchMap.has(t.id)
+      onResource(t) && t.status === 'todo' && t.pinned && t.start_date && t.end_date
     );
     for (const t of pinnedTasks) {
-      patchMap.set(t.id, { start: t.start_date, end: t.end_date, pinned: true });
+      if (!patchMap.has(t.id)) {
+        patchMap.set(t.id, { start: t.start_date, end: t.end_date, pinned: true });
+      }
     }
     const pinnedSlots = pinnedTasks.map(t => ({
       start: new Date(t.start_date).getTime(),
