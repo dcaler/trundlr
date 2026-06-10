@@ -233,7 +233,7 @@ input[readonly] {
 
 .priority-p1 { background: #dc3545; color: white; }
 .priority-p2 { background: #fd7e14; color: white; }
-.priority-p3 { background: #6c757d; color: white; }
+.priority-p3 { background: #ffc107; color: #333; }
 .priority-p4 { background: #adb5bd; color: #495057; }
 
 /* ── Gantt timeline ─────────────────────────────────────────────────────── */
