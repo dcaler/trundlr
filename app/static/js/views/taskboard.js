@@ -158,6 +158,15 @@ async function showTaskBoard(el, showCompleted = false) {
   });
 }
 
-registerView('/tasks', async (el) => {
-  await showTaskBoard(el, false);
+registerView('/tasks', async (el, params = {}) => {
+  if (params.id) {
+    try {
+      const task = await api.get(`/tasks/${params.id}`);
+      await showProjectDetail(el, task.project_id, task.id);
+    } catch (_) {
+      await showTaskBoard(el, false);
+    }
+  } else {
+    await showTaskBoard(el, false);
+  }
 });

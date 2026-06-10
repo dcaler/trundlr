@@ -520,6 +520,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   );
 }
 
-registerView('/projects', async (el) => {
-  await showProjectsList(el);
+registerView('/projects', async (el, params = {}) => {
+  if (params.id) await showProjectDetail(el, params.id);
+  else            await showProjectsList(el);
 });
