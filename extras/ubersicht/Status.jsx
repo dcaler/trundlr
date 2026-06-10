@@ -139,7 +139,7 @@ export const render = ({ output }) => {
             const prefix = statusTask.status === 'in_progress' ? '▶' : '✓';
             subItems.push(
               <li key="s">
-                <span onClick={() => run(`open '${API}/#/tasks'`)} style={taskLink}>{prefix} {statusTask.title}</span>
+                <span onClick={() => run(`open '${API}/#/tasks/${statusTask.id}'`)} style={taskLink}>{prefix} {statusTask.title}</span>
               </li>
             );
           }
@@ -149,13 +149,13 @@ export const render = ({ output }) => {
                       :                   '';
             subItems.push(
               <li key="n">
-                <span onClick={() => run(`open '${API}/#/tasks'`)} style={taskLink}>→ {next.title}{eta}</span>
+                <span onClick={() => run(`open '${API}/#/tasks/${next.id}'`)} style={taskLink}>→ {next.title}{eta}</span>
               </li>
             );
           }
           return (
             <li key={p.id} style={{marginBottom: '5px'}}>
-              <span onClick={() => run(`open '${API}/#/projects'`)} style={taskLink}>{p.name}</span>
+              <span onClick={() => run(`open '${API}/#/projects/${p.id}'`)} style={taskLink}>{p.name}</span>
               {subItems.length ? <ul>{subItems}</ul> : null}
             </li>
           );

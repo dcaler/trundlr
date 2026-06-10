@@ -31,19 +31,33 @@ function setActiveNav(hash) {
 
 async function navigate() {
   const hash = location.hash.slice(1) || '/projects';
-  const view = views[hash] || views['/projects'];
   const el = document.getElementById('app');
 
-  setActiveNav(hash);
+  let view   = views[hash];
+  let params = {};
 
+  // Parameterized route: /base/id  e.g. /projects/42
   if (!view) {
-    el.innerHTML = '<p class="error">Page not found.</p>';
-    return;
+    const cut = hash.indexOf('/', 1);
+    if (cut !== -1) {
+      const base = hash.slice(0, cut);
+      const id   = parseInt(hash.slice(cut + 1));
+      if (!isNaN(id) && views[base]) {
+        view   = views[base];
+        params = { id };
+      }
+    }
   }
+
+  // Highlight the base nav item when on a deep-link sub-path
+  setActiveNav(params.id ? hash.slice(0, hash.lastIndexOf('/')) : hash);
+
+  if (!view) view = views['/projects'];
+  if (!view) { el.innerHTML = '<p class="error">Page not found.</p>'; return; }
 
   el.innerHTML = '<p class="loading">Loading…</p>';
   try {
-    const html = await view(el);
+    const html = await view(el, params);
     if (html != null) el.innerHTML = html;
   } catch (err) {
     el.innerHTML = `<p class="error">Error: ${escHtml(err.message)}</p>`;
