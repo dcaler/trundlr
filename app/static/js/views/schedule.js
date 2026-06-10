@@ -650,7 +650,7 @@ async function showSchedule(el) {
         <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(0,0,0,0.12);border:1px solid #dee2e6"></span>Unavailable</span>
         <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(220,53,69,0.22);border:1px solid #dee2e6"></span>Blockout</span>
         <span style="margin-left:auto;display:flex;align-items:center;gap:0.75rem">
-          <button id="btn-realign" class="btn btn-ghost" style="font-size:0.75rem;padding:0.2rem 0.5rem">↺ Re-align</button>
+          <button id="btn-realign" class="btn btn-ghost" style="font-size:0.75rem;padding:0.2rem 0.5rem">↺ Re-flow</button>
           <span style="color:var(--text-muted);font-size:0.75rem">Today highlighted blue · hover bar for times</span>
         </span>
       </div>
@@ -679,20 +679,20 @@ async function showSchedule(el) {
     body.querySelector('#btn-realign').addEventListener('click', async () => {
       const btn = body.querySelector('#btn-realign');
       btn.disabled = true;
-      btn.textContent = 'Re-aligning…';
+      btn.textContent = 'Re-flowing…';
       try {
         const count = await realignSchedule(resources, tasks, projects);
         if (count === 0) {
           alert('Tasks are already in priority order — no changes needed.');
           btn.disabled = false;
-          btn.textContent = '↺ Re-align';
+          btn.textContent = '↺ Re-flow';
         } else {
           await render();
         }
       } catch (err) {
-        alert(`Re-align failed: ${err.message}`);
+        alert(`Re-flow failed: ${err.message}`);
         btn.disabled = false;
-        btn.textContent = '↺ Re-align';
+        btn.textContent = '↺ Re-flow';
       }
     });
   }

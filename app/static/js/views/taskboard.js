@@ -53,7 +53,7 @@ async function showTaskBoard(el, showCompleted = false) {
           ${statusOpts}
         </select>
       </td>
-      <td>${escHtml(t.title)}${depHtml}</td>
+      <td><button class="btn btn-ghost open-task-btn" data-id="${t.id}" data-project-id="${t.project_id}" style="padding:0;text-align:left;font-weight:inherit;font-size:inherit">${escHtml(t.title)}</button>${depHtml}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${priorityBadge(priorityByProject[t.project_id])}${escHtml(byProject[t.project_id] || '—')}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${escHtml((t.resource_ids || []).map(id => byResource[id]).filter(Boolean).join(', ') || '—')}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
@@ -71,6 +71,7 @@ async function showTaskBoard(el, showCompleted = false) {
     <div style="display:flex;align-items:baseline;gap:1.5rem;margin-bottom:1rem;flex-wrap:wrap">
       <h1 style="margin:0">Tasks</h1>
       <span style="color:var(--text-muted);font-size:0.9em">${doneCount} / ${totalCount} done</span>
+      <button id="btn-reflow" class="btn btn-ghost" style="font-size:0.85em">↺ Re-flow</button>
       <label style="font-size:0.9em;margin-left:auto">
         <input type="checkbox" id="show-done" ${showDoneChecked}> Show completed
       </label>
@@ -96,10 +97,51 @@ async function showTaskBoard(el, showCompleted = false) {
     showTaskBoard(el, e.target.checked);
   });
 
+  el.querySelector('#btn-reflow')?.addEventListener('click', async () => {
+    const btn = el.querySelector('#btn-reflow');
+    btn.disabled = true;
+    btn.textContent = 'Re-flowing…';
+    try {
+      const [resources, taskList, projects] = await Promise.all([
+        api.get('/resources/'), api.get('/tasks/'), api.get('/projects/'),
+      ]);
+      const count = await realignSchedule(resources, taskList, projects);
+      if (count === 0) {
+        alert('Tasks are already in priority order — no changes needed.');
+        btn.disabled = false;
+        btn.textContent = '↺ Re-flow';
+      } else {
+        await showTaskBoard(el, showCompleted);
+      }
+    } catch (err) {
+      alert(`Re-flow failed: ${err.message}`);
+      btn.disabled = false;
+      btn.textContent = '↺ Re-flow';
+    }
+  });
+
+  el.querySelectorAll('.open-task-btn').forEach(btn => {
+    btn.addEventListener('click', () =>
+      showProjectDetail(el, parseInt(btn.dataset.projectId), parseInt(btn.dataset.id))
+    );
+  });
+
   el.querySelectorAll('.status-sel').forEach(sel => {
     sel.addEventListener('change', async () => {
+      const patch = { status: sel.value };
+      if (sel.value === 'in_progress') {
+        patch.start_date = nowIsoStr();
+      } else if (sel.value === 'done') {
+        const now = new Date();
+        patch.end_date = nowIsoStr();
+        const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
+        if (task?.start_date) {
+          const durH = (now.getTime() - new Date(task.start_date).getTime()) / 3600000;
+          if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
+        }
+      }
       try {
-        await api.patch(`/tasks/${sel.dataset.id}`, { status: sel.value });
+        await api.patch(`/tasks/${sel.dataset.id}`, patch);
         await showTaskBoard(el, showCompleted);
       } catch (err) { alert(`Error: ${err.message}`); }
     });

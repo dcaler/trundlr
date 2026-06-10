@@ -8,7 +8,7 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceWindow, Task, TaskResource
+from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceWindow, Task, TaskResource, TaskStatus
 from app.schemas import BlockoutCreate, BlockoutRead, ResourceCreate, ResourceRead, ResourceUpdate, WindowCreate, WindowRead
 from app.validation import DBId
 
@@ -67,6 +67,7 @@ def get_next_available(resource_id: int = DBId(), session: Session = Depends(get
         t.end_date or t.start_date
         for t in tasks
         if (t.end_date or t.start_date) is not None
+        and t.status not in (TaskStatus.done, TaskStatus.failed)
     ]
     next_dt = max(candidates) if candidates else None
     return {"next_available": next_dt.isoformat() if next_dt else None}

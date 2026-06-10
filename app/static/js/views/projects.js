@@ -16,6 +16,13 @@ function prioritySelect(selected = 3) {
   </select>`;
 }
 
+// Current local time as a naive ISO string "YYYY-MM-DDTHH:MM:00"
+function nowIsoStr() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+}
+
 // Format ISO datetime string for display: "2025-06-01T09:00:00" → "2025-06-01 09:00"
 function fmtDt(iso) {
   if (!iso) return '—';
@@ -104,9 +111,11 @@ function setupDependencyAutoStart(form, taskById) {
     if (!dep) return;
     const anchor = dep.end_date || dep.start_date;
     if (anchor) {
-      const iso = anchor.replace(' ', 'T');
-      startDateEl.value = iso.slice(0, 10);
-      if (startTimeEl) startTimeEl.value = iso.slice(11, 16);
+      const anchorMs = Math.max(new Date(anchor.replace(' ', 'T')).getTime(), Date.now());
+      const d = new Date(anchorMs);
+      const p = n => String(n).padStart(2, '0');
+      startDateEl.value = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+      if (startTimeEl) startTimeEl.value = `${p(d.getHours())}:${p(d.getMinutes())}`;
       startDateEl.dispatchEvent(new Event('change'));
     }
   });
@@ -455,8 +464,20 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
 
   el.querySelectorAll('.status-select').forEach(sel =>
     sel.addEventListener('change', async () => {
+      const patch = { status: sel.value };
+      if (sel.value === 'in_progress') {
+        patch.start_date = nowIsoStr();
+      } else if (sel.value === 'done') {
+        const now = new Date();
+        patch.end_date = nowIsoStr();
+        const task = taskById[parseInt(sel.dataset.id)];
+        if (task?.start_date) {
+          const durH = (now.getTime() - new Date(task.start_date).getTime()) / 3600000;
+          if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
+        }
+      }
       try {
-        await api.patch(`/tasks/${sel.dataset.id}`, { status: sel.value });
+        await api.patch(`/tasks/${sel.dataset.id}`, patch);
       } catch (err) {
         alert(`Error: ${err.message}`);
         await showProjectDetail(el, projectId);
