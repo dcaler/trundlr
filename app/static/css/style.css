@@ -274,11 +274,10 @@ input[readonly] {
   overflow: visible; /* override generic table{overflow:hidden} so sticky cells work */
 }
 
-/* Sticky resource-name column */
+/* Resource-name column — pinned via JS translateX (CSS sticky unreliable on collapsed tables) */
 .gantt-label-th,
 .gantt-label-td {
-  position: sticky;
-  left: 0;
+  position: relative;
   z-index: 2;
   background: white;
   min-width: 160px;

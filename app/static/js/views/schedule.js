@@ -661,11 +661,19 @@ async function showSchedule(el) {
         </table>
       </div>`;
 
-    // Anchor scroll to today (2-hour left margin so there's a little context)
+    // Pin label column and anchor scroll to today.
+    // CSS sticky is unreliable on border-collapse:collapse tables; translateX is guaranteed.
     const wrapper = body.querySelector('.gantt-scroll-wrapper');
     if (wrapper) {
+      const syncLabels = () => {
+        const x = wrapper.scrollLeft;
+        wrapper.querySelectorAll('.gantt-label-th, .gantt-label-td')
+          .forEach(el => { el.style.transform = `translateX(${x}px)`; });
+      };
+      wrapper.addEventListener('scroll', syncLabels, { passive: true });
       const daysIn = schedDaysBetween(from, today);
       wrapper.scrollLeft = Math.max(0, daysIn * 24 * SCHED_HOUR_WIDTH - 2 * SCHED_HOUR_WIDTH);
+      syncLabels();
     }
 
     body.querySelector('#btn-realign').addEventListener('click', async () => {
@@ -728,11 +736,18 @@ async function showSchedule(el) {
     const dates = schedGenerateDates(from, to);
     body.innerHTML = buildUtilHtml(utilData, conflictsMap, dates, today);
 
-    // Anchor scroll to today
+    // Pin label column and anchor scroll to today
     const wrapper = body.querySelector('.gantt-scroll-wrapper');
     if (wrapper) {
+      const syncLabels = () => {
+        const x = wrapper.scrollLeft;
+        wrapper.querySelectorAll('.gantt-label-th, .gantt-label-td')
+          .forEach(el => { el.style.transform = `translateX(${x}px)`; });
+      };
+      wrapper.addEventListener('scroll', syncLabels, { passive: true });
       const daysIn = schedDaysBetween(from, today);
       wrapper.scrollLeft = Math.max(0, GANTT_LABEL_W + daysIn * UTIL_DAY_W - 100);
+      syncLabels();
     }
   }
 
