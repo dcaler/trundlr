@@ -134,6 +134,7 @@ class TaskUpdate(BaseModel):
     exit_code: Optional[int] = None
     log_tail: Optional[str] = None
     pinned: Optional[bool] = None
+    project_id: Optional[BodyId] = None
 
     @model_validator(mode="after")
     def end_after_start(self) -> "TaskUpdate":

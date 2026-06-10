@@ -114,6 +114,10 @@ def update_task(
         if not session.get(Task, updates["depends_on_id"]):
             raise HTTPException(status_code=404, detail="Dependency task not found")
 
+    if "project_id" in updates:
+        if not session.get(Project, updates["project_id"]):
+            raise HTTPException(status_code=404, detail="Project not found")
+
     for key, value in updates.items():
         setattr(task, key, value)
 
