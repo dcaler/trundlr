@@ -559,29 +559,14 @@ function buildUtilHtml(utilData, conflictsMap, dates, today) {
 
 async function showSchedule(el) {
   const today   = schedTodayStr();
-  let from      = today;
-  let numDays   = 3;
   let activeTab = 'gantt';
   let renderGen = 0;
 
   async function render() {
     const gen = ++renderGen;
-    const to  = schedAddDays(from, numDays - 1);
 
     el.innerHTML = `
       <h1>Schedule</h1>
-      <div class="form-row" style="margin-bottom:0.75rem;align-items:center;flex-wrap:wrap;gap:0.5rem">
-        <button id="btn-prev" class="btn btn-ghost" title="Previous day">‹ Prev</button>
-        <label style="display:flex;align-items:center;gap:0.3rem;margin:0">
-          From <input type="date" id="from-input" value="${from}">
-        </label>
-        <span style="color:var(--text-muted);font-size:0.85rem">→ ${to}</span>
-        <label style="display:flex;align-items:center;gap:0.3rem;margin:0">
-          Show <input type="number" id="days-input" value="${numDays}" min="1" max="90" style="width:55px">
-          <span style="font-size:0.85rem;color:var(--text-muted)">days</span>
-        </label>
-        <button id="btn-next" class="btn btn-ghost" title="Next day">Next ›</button>
-      </div>
       <div class="tab-bar">
         <button class="tab-btn${activeTab === 'gantt' ? ' active' : ''}" id="tab-gantt">Timeline</button>
         <button class="tab-btn${activeTab === 'utilization' ? ' active' : ''}" id="tab-util">Utilization</button>
@@ -589,35 +574,20 @@ async function showSchedule(el) {
       <div id="view-body" style="padding-top:0.75rem"><p class="loading">Loading…</p></div>
     `;
 
-    el.querySelector('#btn-prev').addEventListener('click', async () => {
-      from = schedAddDays(from, -1); await render();
-    });
-    el.querySelector('#btn-next').addEventListener('click', async () => {
-      from = schedAddDays(from, 1); await render();
-    });
-    el.querySelector('#from-input').addEventListener('change', async e => {
-      from = e.target.value; await render();
-    });
-    el.querySelector('#days-input').addEventListener('change', async e => {
-      const n = parseInt(e.target.value);
-      if (n >= 1) { numDays = n; await render(); }
-    });
-
     el.querySelector('#tab-gantt').addEventListener('click', async () => {
       if (activeTab === 'gantt') return;
       activeTab = 'gantt'; await render();
     });
-
     el.querySelector('#tab-util').addEventListener('click', async () => {
       if (activeTab === 'utilization') return;
       activeTab = 'utilization'; await render();
     });
 
-    if (activeTab === 'gantt') await renderGantt(gen, to);
-    else await renderUtilization(gen, to);
+    if (activeTab === 'gantt') await renderGantt(gen);
+    else await renderUtilization(gen);
   }
 
-  async function renderGantt(gen, to) {
+  async function renderGantt(gen) {
     let resources, tasks, projects;
     try {
       [resources, tasks, projects] = await Promise.all([
@@ -637,6 +607,13 @@ async function showSchedule(el) {
       body.innerHTML = '<p style="color:var(--text-muted)">No resources yet — add some in the Resources tab.</p>';
       return;
     }
+
+    // Compute date range from all task dates, always including today
+    const taskDateStrs = tasks.flatMap(t => [t.start_date, t.end_date]).filter(Boolean).map(d => d.slice(0, 10));
+    const earliest = taskDateStrs.length ? taskDateStrs.reduce((a, b) => a < b ? a : b) : today;
+    const latest   = taskDateStrs.length ? taskDateStrs.reduce((a, b) => a > b ? a : b) : schedAddDays(today, 14);
+    const from = schedAddDays(earliest < today ? earliest : today, -7);
+    const to   = schedAddDays(latest   > today ? latest   : today,  14);
 
     // Fetch availability data for shading; fall back to empty if requests fail
     let windowsByResource = {}, blockoutsByResource = {};
@@ -684,6 +661,13 @@ async function showSchedule(el) {
         </table>
       </div>`;
 
+    // Anchor scroll to today (2-hour left margin so there's a little context)
+    const wrapper = body.querySelector('.gantt-scroll-wrapper');
+    if (wrapper) {
+      const daysIn = schedDaysBetween(from, today);
+      wrapper.scrollLeft = Math.max(0, daysIn * 24 * SCHED_HOUR_WIDTH - 2 * SCHED_HOUR_WIDTH);
+    }
+
     body.querySelector('#btn-realign').addEventListener('click', async () => {
       const btn = body.querySelector('#btn-realign');
       btn.disabled = true;
@@ -705,7 +689,11 @@ async function showSchedule(el) {
     });
   }
 
-  async function renderUtilization(gen, to) {
+  async function renderUtilization(gen) {
+    // Span from 7 days before today to 60 days ahead
+    const from = schedAddDays(today, -7);
+    const to   = schedAddDays(today,  60);
+
     let utilData;
     try {
       utilData = await api.get(`/utilization?from=${from}&to=${to}`);
@@ -737,8 +725,15 @@ async function showSchedule(el) {
     const body = document.getElementById('view-body');
     if (!body) return;
 
-    const dates = schedGenerateDates(from, to);  // to is the parameter
+    const dates = schedGenerateDates(from, to);
     body.innerHTML = buildUtilHtml(utilData, conflictsMap, dates, today);
+
+    // Anchor scroll to today
+    const wrapper = body.querySelector('.gantt-scroll-wrapper');
+    if (wrapper) {
+      const daysIn = schedDaysBetween(from, today);
+      wrapper.scrollLeft = Math.max(0, GANTT_LABEL_W + daysIn * UTIL_DAY_W - 100);
+    }
   }
 
   await render();
