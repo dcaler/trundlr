@@ -67,11 +67,15 @@ async function realignSchedule(resources, tasks, projects) {
     return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
   };
 
-  // Resolve the end of a task using already-computed times where available
+  // Resolve the end of a task using already-computed times where available.
+  // A todo/blocked task not yet placed in patchMap is unresolved → Infinity,
+  // so dependent tasks are never scheduled before their prerequisite is placed.
   const resolvedEnd = id => {
     if (patchMap.has(id)) return new Date(patchMap.get(id).end).getTime();
     const t = tasks.find(t => t.id === id);
-    return t ? new Date(t.end_date || t.start_date || 0).getTime() : 0;
+    if (!t) return 0;
+    if (t.status === 'todo' || t.status === 'blocked') return Infinity;
+    return t.end_date ? new Date(t.end_date).getTime() : 0;
   };
 
   // Window boundary helpers (simple available_from/to model)
