@@ -251,24 +251,41 @@ async function showProjectsList(el, editingId = null) {
 
 async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
-  const [project, tasks, resources] = await Promise.all([
+  const [project, allTasks, resources, allProjects] = await Promise.all([
     api.get(`/projects/${projectId}`),
-    api.get(`/tasks/?project_id=${projectId}`),
+    api.get('/tasks/'),
     api.get('/resources/'),
+    api.get('/projects/'),
   ]);
+  // tasks = only this project's tasks (for the task list); allTasks used for dependency lookup
+  const tasks = allTasks.filter(t => t.project_id === projectId);
 
   const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
-  const taskById     = Object.fromEntries(tasks.map(t => [t.id, t]));
+  const taskById     = Object.fromEntries(allTasks.map(t => [t.id, t]));
+  const projById     = Object.fromEntries(allProjects.map(p => [p.id, p]));
 
-  // Dependency dropdown — excludes the task being edited (selfId) to prevent self-reference
-  const dependsOptions = (selectedId, selfId) => [
-    `<option value=""${!selectedId ? ' selected' : ''}>— none —</option>`,
-    ...tasks
-      .filter(t => t.id !== selfId)
-      .map(t =>
-        `<option value="${t.id}"${t.id === selectedId ? ' selected' : ''}>${escHtml(t.title)}</option>`
-      ),
-  ].join('');
+  // Dependency dropdown grouped by project — excludes selfId to prevent self-reference.
+  // Current project appears first, then other projects alphabetically.
+  const dependsOptions = (selectedId, selfId) => {
+    const grouped = {};
+    for (const t of allTasks) {
+      if (t.id === selfId) continue;
+      (grouped[t.project_id] = grouped[t.project_id] || []).push(t);
+    }
+    const makeOptions = ts => ts.map(t =>
+      `<option value="${t.id}"${t.id === selectedId ? ' selected' : ''}>${escHtml(t.title)}</option>`
+    ).join('');
+    const groups = [
+      ...(grouped[projectId]
+        ? [`<optgroup label="${escHtml(projById[projectId]?.name || 'This project')} (this project)">${makeOptions(grouped[projectId])}</optgroup>`]
+        : []),
+      ...allProjects
+        .filter(p => p.id !== projectId && grouped[p.id])
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(p => `<optgroup label="${escHtml(p.name)}">${makeOptions(grouped[p.id])}</optgroup>`),
+    ].join('');
+    return `<option value=""${!selectedId ? ' selected' : ''}>— none —</option>${groups}`;
+  };
 
   const resourceCheckboxes = (selectedIds = []) =>
     resources.length === 0
@@ -310,6 +327,9 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
             <div><label>Duration (h)</label><input type="number" name="duration" value="${t.duration != null ? t.duration : ''}" min="0.01" step="any" style="width:70px" placeholder="—"></div>
             <div><label>Status</label><select name="status">${statusOptions(t.status)}</select></div>
             ${t.exit_code != null ? `<div><label>Exit code</label><input value="${escHtml(String(t.exit_code))}" readonly style="width:70px"></div>` : ''}
+            <div><label>Move to project</label><select name="project_id">
+              ${allProjects.map(p => `<option value="${p.id}"${p.id === t.project_id ? ' selected' : ''}>${escHtml(p.name)}</option>`).join('')}
+            </select></div>
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
               <button type="button" class="btn btn-ghost cancel-task-edit">Cancel</button>
@@ -434,6 +454,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       const durRaw = fd.get('duration');
       try {
         const depRaw2 = fd.get('depends_on_id');
+        const newProjectId = parseInt(fd.get('project_id'));
         await api.patch(`/tasks/${editRow.dataset.id}`, {
           title: fd.get('title'),
           description: fd.get('description') || null,
@@ -444,8 +465,11 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
           end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
           duration: durRaw ? parseFloat(durRaw) : null,
           status: fd.get('status'),
+          project_id: newProjectId,
         });
-        await showProjectDetail(el, projectId);
+        // If task moved to a different project, navigate there so it's visible
+        const targetProjectId = newProjectId !== projectId ? newProjectId : projectId;
+        await showProjectDetail(el, targetProjectId);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
     el.querySelector('.cancel-task-edit').addEventListener('click',
