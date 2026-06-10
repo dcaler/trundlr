@@ -271,6 +271,7 @@ input[readonly] {
   border-collapse: collapse;
   white-space: nowrap;
   table-layout: fixed;
+  overflow: visible; /* override generic table{overflow:hidden} so sticky cells work */
 }
 
 /* Sticky resource-name column */
