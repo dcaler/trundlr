@@ -16,11 +16,11 @@ function prioritySelect(selected = 3) {
   </select>`;
 }
 
-// Current local time as a naive ISO string "YYYY-MM-DDTHH:MM:00"
+// Current time as a UTC ISO string "YYYY-MM-DDTHH:MM:00"
 function nowIsoStr() {
   const d = new Date();
   const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:00`;
 }
 
 // Format ISO datetime string for display: "2025-06-01T09:00:00" → "2025-06-01 09:00"
@@ -88,8 +88,8 @@ function setupResourceAutoStart(form, resourceById = {}) {
 
     const best = new Date(bestMs);
     const p = n => String(n).padStart(2, '0');
-    startDateEl.value = `${best.getFullYear()}-${p(best.getMonth() + 1)}-${p(best.getDate())}`;
-    if (startTimeEl) startTimeEl.value = `${p(best.getHours())}:${p(best.getMinutes())}`;
+    startDateEl.value = `${best.getUTCFullYear()}-${p(best.getUTCMonth() + 1)}-${p(best.getUTCDate())}`;
+    if (startTimeEl) startTimeEl.value = `${p(best.getUTCHours())}:${p(best.getUTCMinutes())}`;
     startDateEl.dispatchEvent(new Event('change'));
   }
 
@@ -114,8 +114,8 @@ function setupDependencyAutoStart(form, taskById) {
       const anchorMs = Math.max(new Date(anchor.replace(' ', 'T')).getTime(), Date.now());
       const d = new Date(anchorMs);
       const p = n => String(n).padStart(2, '0');
-      startDateEl.value = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
-      if (startTimeEl) startTimeEl.value = `${p(d.getHours())}:${p(d.getMinutes())}`;
+      startDateEl.value = `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}`;
+      if (startTimeEl) startTimeEl.value = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
       startDateEl.dispatchEvent(new Event('change'));
     }
   });
@@ -496,7 +496,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
         patch.end_date = nowIsoStr();
         const task = taskById[parseInt(sel.dataset.id)];
         if (task?.start_date) {
-          const durH = (now.getTime() - new Date(task.start_date).getTime()) / 3600000;
+          const durH = (now.getTime() - new Date(task.start_date.replace(' ', 'T') + 'Z').getTime()) / 3600000;
           if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
         }
       }
