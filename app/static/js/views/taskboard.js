@@ -136,7 +136,7 @@ async function showTaskBoard(el, showCompleted = false) {
         patch.end_date = nowIsoStr();
         const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
         if (task?.start_date) {
-          const durH = (now.getTime() - new Date(task.start_date).getTime()) / 3600000;
+          const durH = (now.getTime() - new Date(task.start_date.replace(' ', 'T') + 'Z').getTime()) / 3600000;
           if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
         }
       }
