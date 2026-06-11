@@ -674,6 +674,15 @@ async function showSchedule(el) {
       const daysIn = schedDaysBetween(from, today);
       wrapper.scrollLeft = Math.max(0, daysIn * 24 * SCHED_HOUR_WIDTH - 2 * SCHED_HOUR_WIDTH);
       syncLabels();
+
+      // "Now" indicator line
+      const [fy, fm, fd] = from.split('-').map(Number);
+      const rangeStartMs = new Date(fy, fm - 1, fd).getTime();
+      const nowPx = GANTT_LABEL_W + Math.round((Date.now() - rangeStartMs) / 3_600_000 * SCHED_HOUR_WIDTH);
+      const nowLine = document.createElement('div');
+      nowLine.className = 'gantt-now-line';
+      nowLine.style.left = `${nowPx}px`;
+      wrapper.appendChild(nowLine);
     }
 
     body.querySelector('#btn-realign').addEventListener('click', async () => {
