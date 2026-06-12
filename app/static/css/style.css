@@ -616,11 +616,19 @@ input[readonly] {
     width: 100% !important;
   }
 
-  .form-row input,
+  .form-row input:not([type="checkbox"]):not([type="radio"]),
   .form-row select,
   .form-row textarea {
     width: 100% !important;
     box-sizing: border-box;
+  }
+
+  /* Checkbox/radio labels (e.g. the resource picker) keep the box inline with
+     its text instead of letting the 100%-wide rule above wrap the name below. */
+  .form-row input[type="checkbox"],
+  .form-row input[type="radio"] {
+    width: auto !important;
+    flex: none;
   }
 
   /* Larger touch targets */
