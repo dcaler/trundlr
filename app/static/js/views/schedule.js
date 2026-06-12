@@ -1,8 +1,15 @@
 // ── Schedule view: Timeline (Gantt) + Utilization heatmap ────────────────
 
 const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
-const GANTT_LABEL_W    = 160; // must match .gantt-label-th/.gantt-label-td width in CSS
+let   GANTT_LABEL_W    = 160; // resource-name column width; synced from CSS --gantt-label-w (responsive)
 const UTIL_DAY_W       = 28;  // must match .gantt-day-th / .util-cell width in CSS
+
+// Read the current label-column width from CSS so px math matches the rendered
+// layout at every breakpoint (the var narrows on mobile). Call before building.
+function syncGanttLabelW() {
+  const v = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--gantt-label-w'), 10);
+  if (!isNaN(v)) GANTT_LABEL_W = v;
+}
 
 // ── Availability helpers ──────────────────────────────────────────────────
 
@@ -588,6 +595,7 @@ async function showSchedule(el) {
   }
 
   async function renderGantt(gen) {
+    syncGanttLabelW();
     let resources, tasks, projects;
     try {
       [resources, tasks, projects] = await Promise.all([
@@ -707,6 +715,7 @@ async function showSchedule(el) {
   }
 
   async function renderUtilization(gen) {
+    syncGanttLabelW();
     // Span from 7 days before today to 60 days ahead
     const from = schedAddDays(today, -7);
     const to   = schedAddDays(today,  60);

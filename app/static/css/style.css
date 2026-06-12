@@ -16,6 +16,7 @@
   --warning: #ffc107;
   --success: #198754;
   --nav-height: 56px;
+  --gantt-label-w: 160px;  /* resource-name column width; read by schedule.js (GANTT_LABEL_W) */
 }
 
 body {
@@ -291,9 +292,9 @@ input[readonly] {
   position: relative;
   z-index: 2;
   background: white;
-  min-width: 160px;
-  max-width: 160px;
-  width: 160px;
+  min-width: var(--gantt-label-w);
+  max-width: var(--gantt-label-w);
+  width: var(--gantt-label-w);
   border-right: 2px solid var(--border);
   padding: 0 0.75rem;
   font-size: 0.85rem;
@@ -463,6 +464,26 @@ input[readonly] {
 }
 
 @media (max-width: 640px) {
+  /* Reclaim timeline space: the pinned resource-name column shrinks from 160px.
+     JS reads this var so the now-line / table-width math stays in sync. */
+  :root {
+    --gantt-label-w: 84px;
+  }
+
+  .gantt-label-td,
+  .gantt-label-th {
+    padding: 0 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  .util-label-td {
+    padding: 0.4rem !important;
+  }
+
+  .util-label-td small {
+    display: none;  /* drop the "Peak %"/conflict line — no room at 84px */
+  }
+
   nav {
     flex-wrap: wrap;
     height: auto;
