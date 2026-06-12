@@ -1,5 +1,6 @@
 import math
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,7 @@ _STARTED_AT = datetime.now(timezone.utc).strftime("%H:%M UTC")
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import apply_migrations, create_db_and_tables, init_engine
@@ -62,9 +63,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+_INDEX_HTML = STATIC_DIR / "index.html"
+
+# Append ?v=<version> to local static .css/.js references so browsers fetch
+# fresh assets after every deploy instead of serving a stale cached copy.
+_ASSET_REF_RE = re.compile(r'(href|src)="(/static/[^"]+\.(?:css|js))"')
+
+
+def _versioned_index() -> str:
+    html = _INDEX_HTML.read_text()
+    return _ASSET_REF_RE.sub(
+        lambda m: f'{m.group(1)}="{m.group(2)}?v={_APP_VERSION}"', html
+    )
+
+
 @app.get("/", include_in_schema=False)
 def read_root():
-    return FileResponse(STATIC_DIR / "index.html")
+    return HTMLResponse(_versioned_index())
 
 
 @app.get("/health")
