@@ -168,9 +168,9 @@ class RunnerClaimRead(TaskRead):
 
 class DayUtilizationRead(BaseModel):
     day: date
-    committed: float
-    capacity: float
-    utilization: float
+    committed: float  # hours of tasks assigned
+    capacity: float   # hours of availability
+    net: float        # capacity - committed (positive = spare, negative = over)
 
     model_config = {"from_attributes": True}
 

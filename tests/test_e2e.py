@@ -3,14 +3,18 @@
 A single realistic scenario that exercises the complete application stack:
 
   create project → create resources → create tasks → assign to resources →
-  query schedule (per-resource utilization) → query conflicts (over-allocation)
+  query schedule (per-resource hours) → query conflicts (over-allocation)
   → query cross-resource utilization → lifecycle transitions → teardown
 
-All resources use a 1-task-at-a-time model:
-  - capacity = 1 per available day
-  - committed = count of concurrent tasks
-  - 100% = 1 task (fully booked, not a conflict)
-  - >100% = conflict (2+ tasks on the same day)
+Hours-based model:
+  - capacity = available hours per day (window length minus blockouts)
+  - committed = assigned task-hours (interval overlap with the day)
+  - net = capacity − committed (positive = spare, negative = over)
+  - committed == capacity → at capacity (NOT a conflict)
+  - committed >  capacity → conflict (over-allocated)
+
+Resources here are 8h/day (09:00–17:00). Tasks are single-day 8h blocks; two
+on the same day = 16h vs 8h = over-allocation.
 
 To run against a live container:
     BASE_URL=http://localhost:8000 pytest tests/test_e2e.py -v
@@ -19,7 +23,6 @@ Without the env var, tests run against the TestClient / in-memory DB.
 """
 
 import os
-from datetime import date, timedelta
 
 import pytest
 import httpx
@@ -29,6 +32,10 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.database import get_db
 from app.main import app
+
+# Single-day 8h task blocks (09:00–17:00) on a weekday and a clear day.
+DAY1 = ("2026-06-01T09:00:00", "2026-06-01T17:00:00")  # Monday
+FAR  = ("2026-06-10T09:00:00", "2026-06-10T17:00:00")  # Wednesday, no overlap
 
 
 # ── Client fixture: TestClient (default) or live container ──────────────────
@@ -61,22 +68,11 @@ def client():
 # ── Scenario state: built up incrementally across the test class ─────────────
 
 class TestFullScenario:
-    """
-    Single project, two resources (Alice + GPU), multiple tasks.
+    """Single project, two 8h/day resources (Alice + GPU), stacked tasks.
 
-    Timeline:
-      Jun 01–05 (Mon–Fri): Alice "Data collection" — sole task → 100% util, no conflict
-      Jun 01–05 (Mon–Fri): GPU  "Model training A" — sole task → 100% util, no conflict
-
-      (Stage 5 adds conflicting tasks)
-      Jun 03–05: Alice "Analysis"       — 2 tasks → 200% conflict Jun 3-5
-      Jun 03–07: GPU  "Model training B" — 2 tasks → 200% conflict Jun 3-5
-
-      (Stage 6 adds a 3rd task for deeper overage)
-      Jun 04–05: Alice "Emergency fix"  — 3 tasks → 300% conflict Jun 4-5, overage=2
-      Jun 03–05: GPU  "Model eval"      — 3 tasks → 300% conflict Jun 3-5, overage=2
-
-      (Stage 7 resolves conflicts)
+    Jun 1 (Mon): Data collection (Alice) + Model training A (GPU) — each sole,
+    at capacity, no conflict. Later stages stack more 8h tasks on Jun 1 to
+    create and then resolve over-allocation.
     """
 
     # ── Stage 1: project and resources ──────────────────────────────────────
@@ -122,9 +118,9 @@ class TestFullScenario:
         resp = client.post("/api/resources/", json={
             "name": "GPU Node",
             "kind": "gpu",
-            "available_from": "00:00",
-            "available_to": "23:59",
-            "available_days": 127,  # all 7 days
+            "available_from": "09:00",
+            "available_to": "17:00",
+            "available_days": 127,  # all 7 days, 8h each
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -144,8 +140,7 @@ class TestFullScenario:
             "title": "Data collection",
             "project_id": TestFullScenario._project_id,
             "resource_ids": [TestFullScenario._alice_id],
-            "start_date": "2026-06-01",
-            "end_date": "2026-06-05",
+            "start_date": DAY1[0], "end_date": DAY1[1],
             "status": "in_progress",
         })
         assert resp.status_code == 201
@@ -158,8 +153,7 @@ class TestFullScenario:
             "title": "Model training A",
             "project_id": TestFullScenario._project_id,
             "resource_ids": [TestFullScenario._gpu_id],
-            "start_date": "2026-06-01",
-            "end_date": "2026-06-05",
+            "start_date": DAY1[0], "end_date": DAY1[1],
         })
         assert resp.status_code == 201
         TestFullScenario._task_train_a_id = resp.json()["id"]
@@ -170,23 +164,24 @@ class TestFullScenario:
         titles = {t["title"] for t in resp.json()}
         assert {"Data collection", "Model training A"} <= titles
 
-    # ── Stage 3: clean utilization — 1 task per resource, no conflicts ────────
+    # ── Stage 3: clean utilization — 1 task per resource, at capacity ────────
 
-    def test_10_alice_schedule_shows_full_utilization(self, client):
-        """Jun 1-5: 1 task (Data collection) → committed=1, capacity=1, util=100%."""
+    def test_10_alice_schedule_at_capacity(self, client):
+        """Jun 1: 8h task on 8h day → committed=8, capacity=8, net=0; Jun 2 spare."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/schedule",
-            params={"from": "2026-06-01", "to": "2026-06-05"},
+            params={"from": "2026-06-01", "to": "2026-06-02"},
         )
         assert resp.status_code == 200
         days = {d["day"]: d for d in resp.json()}
-        for day_key in ("2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"):
-            assert days[day_key]["utilization"] == pytest.approx(100.0)
-            assert days[day_key]["committed"] == pytest.approx(1.0)
-            assert days[day_key]["capacity"] == pytest.approx(1.0)
+        assert days["2026-06-01"]["committed"] == pytest.approx(8.0)
+        assert days["2026-06-01"]["capacity"] == pytest.approx(8.0)
+        assert days["2026-06-01"]["net"] == pytest.approx(0.0)
+        assert days["2026-06-02"]["committed"] == pytest.approx(0.0)
+        assert days["2026-06-02"]["net"] == pytest.approx(8.0)
 
     def test_11_alice_no_conflicts_with_one_task(self, client):
-        """1 task = fully booked (100%) — NOT a conflict."""
+        """At capacity is NOT a conflict."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/conflicts",
             params={"from": "2026-06-01", "to": "2026-06-07"},
@@ -194,19 +189,18 @@ class TestFullScenario:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    def test_12_gpu_schedule_shows_full_utilization(self, client):
-        """Jun 1-5: training A alone → committed=1, util=100% each day."""
+    def test_12_gpu_schedule_at_capacity(self, client):
+        """Jun 1: training A alone → net=0; Jun 6-7: no tasks → full spare."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._gpu_id}/schedule",
             params={"from": "2026-06-01", "to": "2026-06-07"},
         )
         assert resp.status_code == 200
         days = {d["day"]: d for d in resp.json()}
-        for day_key in ("2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"):
-            assert days[day_key]["utilization"] == pytest.approx(100.0)
-        # Jun 6-7: no tasks → 0%
-        assert days["2026-06-06"]["utilization"] == pytest.approx(0.0)
-        assert days["2026-06-07"]["utilization"] == pytest.approx(0.0)
+        assert days["2026-06-01"]["committed"] == pytest.approx(8.0)
+        assert days["2026-06-01"]["net"] == pytest.approx(0.0)
+        assert days["2026-06-06"]["committed"] == pytest.approx(0.0)
+        assert days["2026-06-07"]["committed"] == pytest.approx(0.0)
 
     def test_13_gpu_no_conflicts_with_one_task(self, client):
         resp = client.get(
@@ -245,127 +239,112 @@ class TestFullScenario:
         entry = resp.json()[0]
         assert set(entry.keys()) == {"resource_id", "resource_name", "days"}
         day = entry["days"][0]
-        assert set(day.keys()) == {"day", "committed", "capacity", "utilization"}
+        assert set(day.keys()) == {"day", "committed", "capacity", "net"}
 
     # ── Stage 5: add tasks that create conflicts ──────────────────────────────
 
     def test_17_add_analysis_causes_alice_conflict(self, client):
-        """Analysis overlaps Data collection on Jun 3-5 → 2 tasks = conflict."""
+        """Analysis stacks on Jun 1 with Data collection → 16h vs 8h = conflict."""
         resp = client.post("/api/tasks/", json={
             "title": "Analysis",
             "project_id": TestFullScenario._project_id,
             "resource_ids": [TestFullScenario._alice_id],
-            "start_date": "2026-06-03",
-            "end_date": "2026-06-05",
+            "start_date": DAY1[0], "end_date": DAY1[1],
         })
         assert resp.status_code == 201
         TestFullScenario._task_analysis_id = resp.json()["id"]
 
-    def test_18_alice_conflict_on_overlap_days(self, client):
-        """Jun 3-5: 2 tasks → 200% conflict; Jun 1-2: 1 task → clean."""
+    def test_18_alice_conflict_on_overlap_day(self, client):
+        """Jun 1: 2 tasks → over; Jun 2: nothing → clean."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/conflicts",
             params={"from": "2026-06-01", "to": "2026-06-05"},
         )
         assert resp.status_code == 200
-        conflicts = resp.json()
-        conflict_days = {c["day"] for c in conflicts}
-        assert "2026-06-01" not in conflict_days
+        conflict_days = {c["day"] for c in resp.json()}
+        assert "2026-06-01" in conflict_days
         assert "2026-06-02" not in conflict_days
-        assert "2026-06-03" in conflict_days
-        assert "2026-06-04" in conflict_days
-        assert "2026-06-05" in conflict_days
 
-    def test_19_alice_conflict_details_jun_03(self, client):
-        """Jun 3: committed=2, capacity=1, overage=1; both tasks listed."""
+    def test_19_alice_conflict_details_jun_01(self, client):
+        """Jun 1: committed=16h, capacity=8h, overage=8h; both tasks listed."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/conflicts",
-            params={"from": "2026-06-03", "to": "2026-06-03"},
+            params={"from": "2026-06-01", "to": "2026-06-01"},
         )
         conflicts = resp.json()
         assert len(conflicts) == 1
         c = conflicts[0]
-        assert c["day"] == "2026-06-03"
-        assert c["committed"] == pytest.approx(2.0)
-        assert c["capacity"] == pytest.approx(1.0)
-        assert c["overage"] == pytest.approx(1.0)
+        assert c["day"] == "2026-06-01"
+        assert c["committed"] == pytest.approx(16.0)
+        assert c["capacity"] == pytest.approx(8.0)
+        assert c["overage"] == pytest.approx(8.0)
         titles = {t["title"] for t in c["tasks"]}
         assert "Data collection" in titles
         assert "Analysis" in titles
 
     def test_20_add_training_b_causes_gpu_conflict(self, client):
-        """Training B overlaps Training A on Jun 3-5 → GPU conflict."""
+        """Training B stacks on Jun 1 with Training A → GPU conflict."""
         resp = client.post("/api/tasks/", json={
             "title": "Model training B",
             "project_id": TestFullScenario._project_id,
             "resource_ids": [TestFullScenario._gpu_id],
-            "start_date": "2026-06-03",
-            "end_date": "2026-06-07",
+            "start_date": DAY1[0], "end_date": DAY1[1],
         })
         assert resp.status_code == 201
         TestFullScenario._task_train_b_id = resp.json()["id"]
 
-    def test_21_gpu_conflict_on_overlap_days(self, client):
+    def test_21_gpu_conflict_on_overlap_day(self, client):
         resp = client.get(
             f"/api/resources/{TestFullScenario._gpu_id}/conflicts",
             params={"from": "2026-06-01", "to": "2026-06-07"},
         )
         conflict_days = {c["day"] for c in resp.json()}
-        assert "2026-06-01" not in conflict_days
+        assert "2026-06-01" in conflict_days
         assert "2026-06-02" not in conflict_days
-        assert "2026-06-03" in conflict_days
-        assert "2026-06-04" in conflict_days
-        assert "2026-06-05" in conflict_days
-        assert "2026-06-06" not in conflict_days  # B alone after A ends
-        assert "2026-06-07" not in conflict_days
 
     # ── Stage 6: deeper conflicts (3 tasks each) ─────────────────────────────
 
     def test_22_add_emergency_fix_deepens_alice_conflict(self, client):
-        """3rd task for Alice on Jun 4-5 → overage=2."""
+        """3rd 8h task for Alice on Jun 1 → committed 24h, overage 16h."""
         resp = client.post("/api/tasks/", json={
             "title": "Emergency fix",
             "project_id": TestFullScenario._project_id,
             "resource_ids": [TestFullScenario._alice_id],
-            "start_date": "2026-06-04",
-            "end_date": "2026-06-05",
+            "start_date": DAY1[0], "end_date": DAY1[1],
         })
         assert resp.status_code == 201
         TestFullScenario._task_emerg_id = resp.json()["id"]
 
-    def test_23_alice_conflict_overage_two_on_jun_04(self, client):
+    def test_23_alice_conflict_overage_on_jun_01(self, client):
         resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/conflicts",
-            params={"from": "2026-06-04", "to": "2026-06-04"},
+            params={"from": "2026-06-01", "to": "2026-06-01"},
         )
         conflicts = resp.json()
         assert len(conflicts) == 1
         c = conflicts[0]
-        assert c["committed"] == pytest.approx(3.0)
-        assert c["capacity"] == pytest.approx(1.0)
-        assert c["overage"] == pytest.approx(2.0)
+        assert c["committed"] == pytest.approx(24.0)
+        assert c["capacity"] == pytest.approx(8.0)
+        assert c["overage"] == pytest.approx(16.0)
         titles = {t["title"] for t in c["tasks"]}
-        assert "Data collection" in titles
-        assert "Analysis" in titles
-        assert "Emergency fix" in titles
+        assert {"Data collection", "Analysis", "Emergency fix"} <= titles
 
     def test_24_add_model_eval_deepens_gpu_conflict(self, client):
-        """3rd task for GPU Jun 3-5."""
+        """3rd task for GPU on Jun 1."""
         resp = client.post("/api/tasks/", json={
             "title": "Model eval",
             "project_id": TestFullScenario._project_id,
             "resource_ids": [TestFullScenario._gpu_id],
-            "start_date": "2026-06-03",
-            "end_date": "2026-06-05",
+            "start_date": DAY1[0], "end_date": DAY1[1],
         })
         assert resp.status_code == 201
         TestFullScenario._task_eval_id = resp.json()["id"]
 
     def test_25_gpu_conflict_lists_three_contributing_tasks(self, client):
-        """Jun 3: training A + training B + model eval all active."""
+        """Jun 1: training A + training B + model eval all active."""
         resp = client.get(
             f"/api/resources/{TestFullScenario._gpu_id}/conflicts",
-            params={"from": "2026-06-03", "to": "2026-06-03"},
+            params={"from": "2026-06-01", "to": "2026-06-01"},
         )
         titles = {t["title"] for t in resp.json()[0]["tasks"]}
         assert {"Model training A", "Model training B", "Model eval"} <= titles
@@ -380,24 +359,23 @@ class TestFullScenario:
             assert resp.json()["status"] == status
 
     def test_27_patch_task_dates_updates_schedule(self, client):
-        """Move emergency fix to Jun 10-11 (no overlap) → Alice Jun 4-5 goes back to 2 tasks."""
+        """Move emergency fix to a clear day → Alice Jun 1 back to 2 tasks (16h)."""
         task_id = TestFullScenario._task_emerg_id
         resp = client.patch(f"/api/tasks/{task_id}", json={
-            "start_date": "2026-06-10",
-            "end_date": "2026-06-11",
+            "start_date": FAR[0], "end_date": FAR[1],
         })
         assert resp.status_code == 200
 
         conflicts_resp = client.get(
             f"/api/resources/{TestFullScenario._alice_id}/conflicts",
-            params={"from": "2026-06-04", "to": "2026-06-04"},
+            params={"from": "2026-06-01", "to": "2026-06-01"},
         )
         c = conflicts_resp.json()[0]
-        assert c["committed"] == pytest.approx(2.0)  # back to just DC + Analysis
-        assert c["overage"] == pytest.approx(1.0)
+        assert c["committed"] == pytest.approx(16.0)  # Data collection + Analysis
+        assert c["overage"] == pytest.approx(8.0)
 
     def test_28_unassign_resource_removes_from_schedule(self, client):
-        """Unassign model eval from GPU → GPU Jun 3-5 goes back to 2 tasks."""
+        """Unassign model eval from GPU → GPU Jun 1 back to 2 tasks (16h)."""
         resp = client.patch(
             f"/api/tasks/{TestFullScenario._task_eval_id}",
             json={"resource_ids": []},
@@ -407,11 +385,11 @@ class TestFullScenario:
 
         conflicts_resp = client.get(
             f"/api/resources/{TestFullScenario._gpu_id}/conflicts",
-            params={"from": "2026-06-03", "to": "2026-06-03"},
+            params={"from": "2026-06-01", "to": "2026-06-01"},
         )
         c = conflicts_resp.json()[0]
-        assert c["committed"] == pytest.approx(2.0)
-        assert c["overage"] == pytest.approx(1.0)
+        assert c["committed"] == pytest.approx(16.0)
+        assert c["overage"] == pytest.approx(8.0)
 
     # ── Stage 8: validation gates (schedule endpoints) ───────────────────────
 

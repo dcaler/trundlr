@@ -9,7 +9,7 @@ For each: correct JSON shape, values matching engine output, 404 on missing
 resource, and 422 on an inverted date range.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,12 +43,11 @@ def client():
 def seeded_client(client):
     """Client pre-populated with one resource and overlapping tasks.
 
-    Resource (Mon-Fri, 09:00-17:00, available_days=31) has:
-      Task A: Jun 1-2 (Mon-Tue)  — only task on Jun 1 (100%), one of 3 on Jun 2
-      Task B: Jun 2 (Tue)        — two of three tasks on Jun 2
-      Task C: Jun 2 (Tue)        — Jun 2: A+B+C = 3 tasks = 300% conflict
-      Jun 3: no tasks → 0%
-    other resource has no tasks assigned (always 0% / no conflicts).
+    Resource (Mon-Fri, 09:00-17:00 = 8h/day) has:
+      Task A: Jun 1 (Mon) 09-17 = 8h  → at capacity (net 0), no conflict
+      Tasks B, C, D: Jun 2 (Tue) 09-17 = 8h each → 24h vs 8h → over, conflict
+      Jun 3 (Wed): no tasks → 8h spare
+    other resource has no tasks assigned (always full spare / no conflicts).
     """
     test_client, engine = client
     with Session(engine) as session:
@@ -63,20 +62,20 @@ def seeded_client(client):
         session.add_all([resource, other])
         session.flush()
 
-        # Task A: Jun 1-2 — only task on Jun 1 (100%), one of three on Jun 2
+        # Jun 1: one 8h task → at capacity. Jun 2: three 8h tasks → over capacity.
         t1 = Task(title="Task A", project_id=project.id,
-                  start_date=date(2026, 6, 1), end_date=date(2026, 6, 2))
-        # Tasks B+C: Jun 2 only → Jun 2 has A+B+C = 3 tasks (300%, conflict)
+                  start_date=datetime(2026, 6, 1, 9), end_date=datetime(2026, 6, 1, 17))
         t2 = Task(title="Task B", project_id=project.id,
-                  start_date=date(2026, 6, 2), end_date=date(2026, 6, 2))
+                  start_date=datetime(2026, 6, 2, 9), end_date=datetime(2026, 6, 2, 17))
         t3 = Task(title="Task C", project_id=project.id,
-                  start_date=date(2026, 6, 2), end_date=date(2026, 6, 2))
-        session.add_all([t1, t2, t3])
+                  start_date=datetime(2026, 6, 2, 9), end_date=datetime(2026, 6, 2, 17))
+        t4 = Task(title="Task D", project_id=project.id,
+                  start_date=datetime(2026, 6, 2, 9), end_date=datetime(2026, 6, 2, 17))
+        session.add_all([t1, t2, t3, t4])
         session.flush()
         session.add_all([
-            TaskResource(task_id=t1.id, resource_id=resource.id),
-            TaskResource(task_id=t2.id, resource_id=resource.id),
-            TaskResource(task_id=t3.id, resource_id=resource.id),
+            TaskResource(task_id=t.id, resource_id=resource.id)
+            for t in (t1, t2, t3, t4)
         ])
         session.commit()
 
@@ -107,10 +106,10 @@ class TestResourceSchedule:
             params={"from": "2026-06-01", "to": "2026-06-01"},
         )
         day = resp.json()[0]
-        assert set(day.keys()) == {"day", "committed", "capacity", "utilization"}
+        assert set(day.keys()) == {"day", "committed", "capacity", "net"}
 
-    def test_utilization_values_match_engine(self, seeded_client):
-        """Jun 1: Task A only → committed=1, capacity=1, util=100%."""
+    def test_values_match_engine(self, seeded_client):
+        """Jun 1: Task A only → committed=8h, capacity=8h, net=0."""
         test_client, resource_id, _ = seeded_client
         resp = test_client.get(
             f"/api/resources/{resource_id}/schedule",
@@ -118,29 +117,30 @@ class TestResourceSchedule:
         )
         day = resp.json()[0]
         assert day["day"] == "2026-06-01"
-        assert day["committed"] == pytest.approx(1.0)
-        assert day["capacity"] == pytest.approx(1.0)
-        assert day["utilization"] == pytest.approx(100.0)
+        assert day["committed"] == pytest.approx(8.0)
+        assert day["capacity"] == pytest.approx(8.0)
+        assert day["net"] == pytest.approx(0.0)
 
-    def test_over_allocated_day_above_100(self, seeded_client):
-        """Jun 2: A+B+C → committed=3, capacity=1, util=300%."""
+    def test_over_allocated_day_negative_net(self, seeded_client):
+        """Jun 2: B+C+D → committed=24h, capacity=8h, net=−16."""
         test_client, resource_id, _ = seeded_client
         resp = test_client.get(
             f"/api/resources/{resource_id}/schedule",
             params={"from": "2026-06-02", "to": "2026-06-02"},
         )
         day = resp.json()[0]
-        assert day["utilization"] == pytest.approx(300.0)
+        assert day["committed"] == pytest.approx(24.0)
+        assert day["net"] == pytest.approx(-16.0)
 
     def test_zero_task_day(self, seeded_client):
         test_client, resource_id, _ = seeded_client
         resp = test_client.get(
             f"/api/resources/{resource_id}/schedule",
-            params={"from": "2026-06-10", "to": "2026-06-10"},
+            params={"from": "2026-06-10", "to": "2026-06-10"},  # Wed, no tasks
         )
         day = resp.json()[0]
         assert day["committed"] == pytest.approx(0.0)
-        assert day["utilization"] == pytest.approx(0.0)
+        assert day["net"] == pytest.approx(8.0)
 
     def test_404_on_missing_resource(self, client):
         test_client, _ = client
@@ -177,8 +177,8 @@ class TestResourceConflicts:
         assert resp.status_code == 200
         conflicts = resp.json()
         conflict_days = {c["day"] for c in conflicts}
-        assert "2026-06-01" not in conflict_days  # 1 task = fully booked, not a conflict
-        assert "2026-06-02" in conflict_days       # 3 tasks > capacity=1 → conflict
+        assert "2026-06-01" not in conflict_days  # 8h on 8h day = at capacity, not a conflict
+        assert "2026-06-02" in conflict_days       # 24h > capacity 8h → conflict
         assert "2026-06-03" not in conflict_days   # 0 tasks → no conflict
 
     def test_conflict_shape(self, seeded_client):
@@ -193,24 +193,24 @@ class TestResourceConflicts:
         assert set(c["tasks"][0].keys()) == {"id", "title"}
 
     def test_conflict_overage_value(self, seeded_client):
-        """Jun 2: 3 tasks − capacity 1 = overage 2."""
+        """Jun 2: 24h committed − 8h capacity = overage 16h."""
         test_client, resource_id, _ = seeded_client
         resp = test_client.get(
             f"/api/resources/{resource_id}/conflicts",
             params={"from": "2026-06-02", "to": "2026-06-02"},
         )
         c = resp.json()[0]
-        assert c["overage"] == pytest.approx(2.0)
+        assert c["overage"] == pytest.approx(16.0)
 
     def test_conflict_contributing_tasks(self, seeded_client):
-        """Jun 2: all three tasks (A, B, C) are active."""
+        """Jun 2: the three Jun-2 tasks (B, C, D) are active."""
         test_client, resource_id, _ = seeded_client
         resp = test_client.get(
             f"/api/resources/{resource_id}/conflicts",
             params={"from": "2026-06-02", "to": "2026-06-02"},
         )
         titles = {t["title"] for t in resp.json()[0]["tasks"]}
-        assert titles == {"Task A", "Task B", "Task C"}
+        assert titles == {"Task B", "Task C", "Task D"}
 
     def test_no_conflict_when_within_capacity(self, seeded_client):
         test_client, _, other_id = seeded_client
@@ -259,7 +259,7 @@ class TestUtilization:
         entry = resp.json()[0]
         assert set(entry.keys()) == {"resource_id", "resource_name", "days"}
         assert isinstance(entry["days"], list)
-        assert set(entry["days"][0].keys()) == {"day", "committed", "capacity", "utilization"}
+        assert set(entry["days"][0].keys()) == {"day", "committed", "capacity", "net"}
 
     def test_days_count_matches_range(self, seeded_client):
         test_client, _, _ = seeded_client

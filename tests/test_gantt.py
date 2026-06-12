@@ -128,12 +128,13 @@ def test_schedule_endpoint_matches_seeded_task(api_client):
         "name": "Alice", "kind": "human",
         "available_from": "09:00", "available_to": "17:00", "available_days": 31,
     }).json()
+    # An 8h task (09:00–17:00) on Jun 3 — at capacity on an 8h day.
     api_client.post("/api/tasks/", json={
         "title": "Design",
         "project_id": project["id"],
         "resource_ids": [resource["id"]],
-        "start_date": "2026-06-03",
-        "end_date": "2026-06-05",
+        "start_date": "2026-06-03T09:00:00",
+        "end_date": "2026-06-03T17:00:00",
     })
 
     resp = api_client.get(
@@ -143,19 +144,19 @@ def test_schedule_endpoint_matches_seeded_task(api_client):
     assert resp.status_code == 200
     days = {d["day"]: d for d in resp.json()}
 
-    # Days outside the task window → 0 committed, bar would have zero width
+    # Days outside the task window → 0 committed hours, bar would have zero width
     assert days["2026-06-01"]["committed"] == pytest.approx(0.0)
     assert days["2026-06-02"]["committed"] == pytest.approx(0.0)
+    assert days["2026-06-04"]["committed"] == pytest.approx(0.0)
 
-    # Days inside the task window → 1 task committed, bar present
-    assert days["2026-06-03"]["committed"] == pytest.approx(1.0)
-    assert days["2026-06-04"]["committed"] == pytest.approx(1.0)
-    assert days["2026-06-05"]["committed"] == pytest.approx(1.0)
+    # Task day → 8 committed hours on an 8h day (net 0, at capacity)
+    assert days["2026-06-03"]["committed"] == pytest.approx(8.0)
+    assert days["2026-06-03"]["capacity"] == pytest.approx(8.0)
+    assert days["2026-06-03"]["net"] == pytest.approx(0.0)
 
-    # Also assert pixel positions are correct for this seed
+    # Also assert pixel positions are correct for this single-day seed
     range_start = date(2026, 6, 1)
-    task_start  = date(2026, 6, 3)
-    task_end    = date(2026, 6, 5)
+    task_day    = date(2026, 6, 3)
 
-    assert bar_left_px(range_start, task_start, W) == 2 * W   # 2 days from left
-    assert bar_width_px(range_start, date(2026, 6, 7), task_start, task_end, W) == 3 * W
+    assert bar_left_px(range_start, task_day, W) == 2 * W   # 2 days from left
+    assert bar_width_px(range_start, date(2026, 6, 7), task_day, task_day, W) == W
