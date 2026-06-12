@@ -134,6 +134,7 @@ class TaskUpdate(BaseModel):
     exit_code: Optional[int] = None
     log_tail: Optional[str] = None
     pinned: Optional[bool] = None
+    dependency_broken: Optional[bool] = None
     project_id: Optional[BodyId] = None
 
     @model_validator(mode="after")
@@ -157,6 +158,7 @@ class TaskRead(BaseModel):
     resource_ids: list[int] = []
     depends_on_id: Optional[int] = None
     pinned: bool = False
+    dependency_broken: bool = False
 
     model_config = {"from_attributes": True}
 

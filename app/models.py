@@ -76,6 +76,9 @@ class Task(SQLModel, table=True):
     )
     # When true, re-align skips this task and schedules around its existing dates.
     pinned: bool = Field(default=False)
+    # Set when this task's predecessor was deleted: its depends_on_id is cleared
+    # and status forced to blocked, signalling the user to pick a new dependency.
+    dependency_broken: bool = Field(default=False)
 
     project: Optional[Project] = Relationship(back_populates="tasks")
 

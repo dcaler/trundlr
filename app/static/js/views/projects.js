@@ -352,7 +352,11 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
         ${t.exit_code != null ? `<div style="font-size:0.7rem;color:var(--text-muted)">exit: ${escHtml(String(t.exit_code))}</div>` : ''}
       </td>
       <td>${resNames || '<span style="color:var(--text-muted)">—</span>'}</td>
-      <td style="color:var(--text-muted);font-size:0.8rem">${t.depends_on_id && taskById[t.depends_on_id] ? '↳ ' + escHtml(taskById[t.depends_on_id].title) : '—'}</td>
+      <td style="font-size:0.8rem">${t.dependency_broken
+        ? `<span style="color:var(--danger)" title="This task's dependency was deleted — set a new one.">⚠ deleted — update</span>`
+        : t.depends_on_id && taskById[t.depends_on_id]
+        ? `<span style="color:var(--text-muted)">↳ ${escHtml(taskById[t.depends_on_id].title)}</span>`
+        : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
       <td>${t.duration != null ? t.duration + 'h' : '—'}</td>

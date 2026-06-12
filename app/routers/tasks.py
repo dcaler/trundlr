@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, Task, TaskResource
+from app.models import AppSettings, Project, Resource, Task, TaskResource, TaskStatus
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 from app.validation import DBId, OptionalDBIdQuery
 
@@ -110,9 +110,12 @@ def update_task(
                 raise HTTPException(status_code=404, detail=f"Resource {rid} not found")
         _set_resources(task.id, updates.pop("resource_ids"), session)
 
-    if "depends_on_id" in updates and updates["depends_on_id"] is not None:
-        if not session.get(Task, updates["depends_on_id"]):
+    if "depends_on_id" in updates:
+        if updates["depends_on_id"] is not None and not session.get(Task, updates["depends_on_id"]):
             raise HTTPException(status_code=404, detail="Dependency task not found")
+        # Choosing a new dependency clears the "broken dependency" flag.
+        if updates["depends_on_id"] is not None:
+            task.dependency_broken = False
 
     if "project_id" in updates:
         if not session.get(Project, updates["project_id"]):
@@ -136,8 +139,21 @@ def update_task(
 @router.delete("/{task_id}", status_code=204)
 def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     task = _get_task_or_404(task_id, session)
+
+    # Any task that depends on this one would dangle (and the FK delete would 500),
+    # so clear the link, force it to blocked, and flag it — signalling the user to
+    # choose a new dependency rather than silently guessing the predecessor.
+    dependents = session.exec(
+        select(Task).where(Task.depends_on_id == task_id)
+    ).all()
+    for dep in dependents:
+        dep.depends_on_id = None
+        dep.status = TaskStatus.blocked
+        dep.dependency_broken = True
+        session.add(dep)
+
     _set_resources(task_id, [], session)
-    session.flush()  # delete TaskResource rows before the task to satisfy FK constraint
+    session.flush()  # clear FK references before deleting the task
     session.delete(task)
     session.commit()
 
