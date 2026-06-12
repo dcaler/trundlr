@@ -1,3 +1,4 @@
+import hashlib
 import math
 import os
 import re
@@ -5,8 +6,26 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-_VERSION_FILE = Path(__file__).parent.parent / "VERSION"
-_APP_VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "dev"
+_APP_DIR = Path(__file__).parent  # app/
+
+
+def _compute_version() -> str:
+    """Fingerprint the deployed source so the version changes iff the code does.
+
+    Hashes the contents (and relative paths) of every Python/JS/CSS/HTML file
+    under app/. A rebuilt image with changed files yields a new hash — which is
+    both the displayed version and the ?v= cache-bust key — while redeploying
+    identical code keeps the same hash. No manual bump, git, or build arg needed.
+    """
+    h = hashlib.sha256()
+    for p in sorted(_APP_DIR.rglob("*")):
+        if p.suffix in {".py", ".js", ".css", ".html"} and "__pycache__" not in p.parts:
+            h.update(p.relative_to(_APP_DIR).as_posix().encode())
+            h.update(p.read_bytes())
+    return h.hexdigest()[:7]
+
+
+_APP_VERSION = _compute_version()
 _STARTED_AT = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
 from fastapi import FastAPI, Request
@@ -19,7 +38,7 @@ from app.database import apply_migrations, create_db_and_tables, init_engine
 from app.routers import projects, resources, schedule, settings, tasks
 from app.routers import caldav, runner
 
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR = _APP_DIR / "static"
 
 
 def _strip_non_finite(value):
