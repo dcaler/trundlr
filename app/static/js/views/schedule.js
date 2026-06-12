@@ -501,25 +501,24 @@ function buildDateHeader(dates, today) {
 
 const UTIL_TOL = 0.05; // hours within which committed ≈ capacity counts as "at capacity"
 
-// Format a net-hours value rounded to ≤1 decimal: "+2", "0", "−3".
-function fmtNetHours(net) {
-  const r = Math.round(net * 10) / 10;
+// Format an over/under hours value rounded to ≤1 decimal: "+2" (over), "−3" (spare).
+function fmtNetHours(over) {
+  const r = Math.round(over * 10) / 10;
   const mag = Number.isInteger(r) ? Math.abs(r) : Math.abs(r).toFixed(1);
-  if (r > 0) return `+${mag}`;
-  if (r < 0) return `−${mag}`; // minus sign
-  return '0';
+  return r > 0 ? `+${mag}` : `−${mag}`; // minus sign for spare
 }
 
 // Cell appearance from (committed, capacity) hours. Washed-out colors:
-// blue = under capacity (spare), green = at capacity, red = over (conflict).
+// red = over availability (+h), blue = under (−h spare), green = even.
+// The number is committed − capacity: positive = hours OVER availability.
 function netCellInfo(committed, capacity) {
   if (capacity === 0 && committed === 0) {
     return { label: '', bg: '#f8f9fa', fg: '#adb5bd', conflict: false }; // unavailable / empty
   }
-  const net = capacity - committed;
-  if (net < -UTIL_TOL) return { label: fmtNetHours(net), bg: 'rgba(220,53,69,0.09)',  fg: '#842029', conflict: true  }; // over
-  if (net >  UTIL_TOL) return { label: fmtNetHours(net), bg: 'rgba(13,110,253,0.06)',  fg: '#0a467e', conflict: false }; // under
-  return                      { label: '0',              bg: 'rgba(25,135,84,0.09)',   fg: '#0a3622', conflict: false }; // at
+  const over = committed - capacity;
+  if (over >  UTIL_TOL) return { label: fmtNetHours(over), bg: 'rgba(220,53,69,0.09)', fg: '#842029', conflict: true  }; // over
+  if (over < -UTIL_TOL) return { label: fmtNetHours(over), bg: 'rgba(13,110,253,0.06)', fg: '#0a467e', conflict: false }; // under
+  return                       { label: '—',               bg: 'rgba(25,135,84,0.09)', fg: '#0a3622', conflict: false }; // even
 }
 
 // Forward-looking capacity summary for the coming 10 days from today.
@@ -528,14 +527,13 @@ function forwardSummary(days, today) {
   if (!fwd.length) return '';
   let over = 0, spare = 0;
   for (const d of fwd) {
-    const net = d.capacity - d.committed;
-    if (net < 0) over += -net; else spare += net;
+    const net = d.committed - d.capacity;
+    if (net > 0) over += net; else spare += -net;
   }
-  const n = fwd.length;
   if (over > UTIL_TOL) {
-    return `<small style="color:var(--danger)">⚠ Over by ${over.toFixed(1)}h · next ${n}d</small>`;
+    return `<small class="util-summary" style="color:var(--danger)">⚠ Over by ${over.toFixed(1)}h</small>`;
   }
-  return `<small style="color:var(--text-muted)">${spare.toFixed(1)}h spare · next ${n}d</small>`;
+  return `<small class="util-summary" style="color:var(--text-muted)">${spare.toFixed(1)}h spare</small>`;
 }
 
 function buildUtilResourceRow(resource, conflictsByDay, today) {
@@ -551,7 +549,7 @@ function buildUtilResourceRow(resource, conflictsByDay, today) {
       tooltip += `\n⚠ Over by ${cdata.overage.toFixed(1)}h — ${names}`;
     }
 
-    const todayCls    = day.day === today ? ' gantt-today' : '';
+    const todayCls    = day.day === today ? ' util-today' : '';
     const conflictCls = info.conflict ? ' util-conflict' : '';
 
     return `<td class="util-cell${conflictCls}${todayCls}"
@@ -582,7 +580,7 @@ function buildUtilHtml(utilData, conflictsMap, dates, today) {
       <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(13,110,253,0.06);border:1px solid #dee2e6"></span>Under (spare h)</span>
       <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(25,135,84,0.09);border:1px solid #dee2e6"></span>At capacity</span>
       <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(220,53,69,0.09);border:1px solid #dee2e6"></span>Over ⚠</span>
-      <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Cells show spare (+) / over (−) hours · hover for detail</span>
+      <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Cells show over (+) / spare (−) hours · hover for detail</span>
     </div>
     <div class="gantt-scroll-wrapper">
       <table class="gantt-table" style="width:${GANTT_LABEL_W + dates.length * UTIL_DAY_W}px">

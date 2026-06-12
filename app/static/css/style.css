@@ -489,6 +489,20 @@ input[readonly] {
   outline-offset: -2px;
 }
 
+/* Today's heatmap cell: blue text + bold, but keep its semantic fill colour
+   (a blue background would mask the over/at/under colour and confuse). */
+.util-today {
+  color: #0d6efd !important;
+  font-weight: 700 !important;
+}
+
+/* Per-resource forward summary under the name — wrap so it stays readable. */
+.util-summary {
+  display: block;
+  white-space: normal;
+  line-height: 1.25;
+}
+
 /* ── Mobile / responsive ─────────────────────────────────────────────────── */
 
 .nav-toggle {
