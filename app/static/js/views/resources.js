@@ -186,54 +186,26 @@ function renderBlockoutsSection(blockouts) {
     </div>`;
 }
 
-async function showResourceDetail(el, resourceId, showCompleted = false) {
+async function showResourceDetail(el, resourceId) {
   el.innerHTML = '<p class="loading">Loading…</p>';
-  const [resource, tasks, allTasks, projects, windows, blockouts] = await Promise.all([
+  const [resource, tasks, windows, blockouts] = await Promise.all([
     api.get(`/resources/${resourceId}`),
     api.get(`/tasks/?resource_id=${resourceId}`),
-    api.get('/tasks/'),
-    api.get('/projects/'),
     api.get(`/resources/${resourceId}/windows`),
     api.get(`/resources/${resourceId}/blockouts`),
   ]);
 
-  const projectById = Object.fromEntries(projects.map(p => [p.id, p]));
-  const taskById    = Object.fromEntries(allTasks.map(t => [t.id, t]));
-  const kindLabel   = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
+  const kindLabel     = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
   const DONE_STATUSES = new Set(['done', 'failed']);
+  const activeCount   = tasks.filter(t => !DONE_STATUSES.has(t.status)).length;
 
-  const visible = showCompleted ? tasks : tasks.filter(t => !DONE_STATUSES.has(t.status));
-  const hiddenCount = tasks.length - visible.length;
-
-  // Blocked tasks always sort to the bottom
-  visible.sort((a, b) => {
-    const aBlocked = a.status === 'blocked' ? 1 : 0;
-    const bBlocked = b.status === 'blocked' ? 1 : 0;
-    if (aBlocked !== bBlocked) return aBlocked - bBlocked;
-    const aMs = a.start_date ? new Date(a.start_date).getTime() : Infinity;
-    const bMs = b.start_date ? new Date(b.start_date).getTime() : Infinity;
-    return aMs - bMs;
-  });
-
-  const rows = visible.map(t => {
-    const project = projectById[t.project_id] || {};
-    const dep = t.depends_on_id ? taskById[t.depends_on_id] : null;
-    const depHtml = dep
-      ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
-      : (t.depends_on_id ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">↳ #${t.depends_on_id}</div>` : '');
-    const pinnedHtml = t.pinned ? ' <span title="Pinned — re-align will not move this task" style="font-size:0.75rem;opacity:0.7">📌</span>' : '';
-    return `<tr>
-      <td>${escHtml(t.title)}${pinnedHtml}${depHtml}${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escHtml(t.description)}</div>` : ''}</td>
-      <td>${escHtml(project.name || '—')}</td>
-      <td>${statusBadge(t.status)}</td>
-      <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
-      <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
-    </tr>`;
-  }).join('');
-
-  const toggleLabel = showCompleted
-    ? 'Hide completed'
-    : `Show completed${hiddenCount > 0 ? ` (${hiddenCount})` : ''}`;
+  const taskLink = tasks.length === 0
+    ? '<p style="color:var(--text-muted)">No tasks assigned to this resource.</p>'
+    : `<p style="margin-bottom:0.5rem">
+        <a class="btn btn-ghost" href="#/tasks?resource=${resourceId}">
+          View ${activeCount} active / ${tasks.length} total in Tasks ▸
+        </a>
+      </p>`;
 
   const scheduleLabel = windows.length > 0
     ? `Custom schedule (${windows.length} window${windows.length !== 1 ? 's' : ''})`
@@ -246,20 +218,8 @@ async function showResourceDetail(el, resourceId, showCompleted = false) {
     <h1>${escHtml(resource.name)}</h1>
     <p style="color:var(--text-muted);margin-bottom:1.5rem">${escHtml(kindLabel[resource.kind] || resource.kind)} · ${escHtml(scheduleLabel)}</p>
 
-    <div style="display:flex;align-items:baseline;gap:1rem;margin-bottom:0.5rem">
-      <h2 style="margin:0">Tasks (${visible.length}${hiddenCount > 0 && !showCompleted ? `/${tasks.length}` : ''})</h2>
-      ${tasks.some(t => DONE_STATUSES.has(t.status))
-        ? `<button class="btn btn-ghost toggle-completed-btn" style="font-size:0.8rem;padding:0.1rem 0.4rem">${toggleLabel}</button>`
-        : ''}
-    </div>
-    ${visible.length === 0
-      ? '<p style="color:var(--text-muted)">No active tasks assigned to this resource.</p>'
-      : `<table>
-          <thead><tr>
-            <th>Title</th><th>Project</th><th>Status</th><th>Start</th><th>End</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>`}
+    <h2 style="margin:0 0 0.5rem">Tasks</h2>
+    ${taskLink}
 
     <div style="margin-top:2.5rem;border-top:1px solid var(--border);padding-top:1.5rem">
       <h2 style="margin:0 0 1rem">Schedule</h2>
@@ -269,15 +229,12 @@ async function showResourceDetail(el, resourceId, showCompleted = false) {
   `;
 
   el.querySelector('.back-btn').addEventListener('click', () => showResourcesList(el));
-  el.querySelector('.toggle-completed-btn')?.addEventListener('click',
-    () => showResourceDetail(el, resourceId, !showCompleted)
-  );
 
   el.querySelectorAll('.delete-window-btn').forEach(btn =>
     btn.addEventListener('click', async () => {
       try {
         await api.delete(`/resources/${resourceId}/windows/${btn.dataset.id}`);
-        await showResourceDetail(el, resourceId, showCompleted);
+        await showResourceDetail(el, resourceId);
       } catch (err) { alert(`Error: ${err.message}`); }
     })
   );
@@ -286,7 +243,7 @@ async function showResourceDetail(el, resourceId, showCompleted = false) {
     btn.addEventListener('click', async () => {
       try {
         await api.delete(`/resources/${resourceId}/blockouts/${btn.dataset.id}`);
-        await showResourceDetail(el, resourceId, showCompleted);
+        await showResourceDetail(el, resourceId);
       } catch (err) { alert(`Error: ${err.message}`); }
     })
   );
@@ -301,7 +258,7 @@ async function showResourceDetail(el, resourceId, showCompleted = false) {
     };
     try {
       await api.post(`/resources/${resourceId}/windows`, payload);
-      await showResourceDetail(el, resourceId, showCompleted);
+      await showResourceDetail(el, resourceId);
     } catch (err) { alert(`Error: ${err.message}`); }
   });
 
@@ -317,7 +274,7 @@ async function showResourceDetail(el, resourceId, showCompleted = false) {
     };
     try {
       await api.post(`/resources/${resourceId}/blockouts`, payload);
-      await showResourceDetail(el, resourceId, showCompleted);
+      await showResourceDetail(el, resourceId);
     } catch (err) { alert(`Error: ${err.message}`); }
   });
 }

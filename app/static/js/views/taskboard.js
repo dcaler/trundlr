@@ -7,7 +7,7 @@ function taskSortKey(t) {
   return t.start_date ? new Date(t.start_date).getTime() : Infinity;
 }
 
-async function showTaskBoard(el, showCompleted = false) {
+async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
 
   const [tasks, projects, resources] = await Promise.all([
@@ -21,7 +21,11 @@ async function showTaskBoard(el, showCompleted = false) {
   const byResource        = Object.fromEntries(resources.map(r => [r.id, r.name]));
   const taskById          = Object.fromEntries(tasks.map(t => [t.id, t]));
 
-  const visible = showCompleted ? tasks : tasks.filter(t => t.status !== 'done');
+  // Optional resource scope (from the filter dropdown or a deep link)
+  const scoped = resourceFilter
+    ? tasks.filter(t => (t.resource_ids || []).includes(resourceFilter))
+    : tasks;
+  const visible = showCompleted ? scoped : scoped.filter(t => t.status !== 'done');
   // Blocked tasks always go to the bottom; within groups sort by start_date then priority.
   visible.sort((a, b) => {
     const aBlocked = a.status === 'blocked' ? 1 : 0;
@@ -64,14 +68,25 @@ async function showTaskBoard(el, showCompleted = false) {
   }).join('');
 
   const showDoneChecked = showCompleted ? 'checked' : '';
-  const totalCount = tasks.length;
-  const doneCount  = tasks.filter(t => t.status === 'done').length;
+  const totalCount = scoped.length;
+  const doneCount  = scoped.filter(t => t.status === 'done').length;
+
+  const resourceOpts = resources.map(r =>
+    `<option value="${r.id}"${r.id === resourceFilter ? ' selected' : ''}>${escHtml(r.name)}</option>`
+  ).join('');
 
   el.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:1.5rem;margin-bottom:1rem;flex-wrap:wrap">
       <h1 style="margin:0">Tasks</h1>
       <span style="color:var(--text-muted);font-size:0.9em">${doneCount} / ${totalCount} done</span>
       <button id="btn-reflow" class="btn btn-ghost" style="font-size:0.85em">↺ Re-flow</button>
+      <label style="font-size:0.9em">
+        Resource
+        <select id="filter-resource" style="font-size:0.95em">
+          <option value="">All</option>
+          ${resourceOpts}
+        </select>
+      </label>
       <label style="font-size:0.9em;margin-left:auto">
         <input type="checkbox" id="show-done" ${showDoneChecked}> Show completed
       </label>
@@ -94,7 +109,11 @@ async function showTaskBoard(el, showCompleted = false) {
   `;
 
   el.querySelector('#show-done')?.addEventListener('change', e => {
-    showTaskBoard(el, e.target.checked);
+    showTaskBoard(el, e.target.checked, resourceFilter);
+  });
+
+  el.querySelector('#filter-resource')?.addEventListener('change', e => {
+    showTaskBoard(el, showCompleted, parseInt(e.target.value) || null);
   });
 
   el.querySelector('#btn-reflow')?.addEventListener('click', async () => {
@@ -111,7 +130,7 @@ async function showTaskBoard(el, showCompleted = false) {
         btn.disabled = false;
         btn.textContent = '↺ Re-flow';
       } else {
-        await showTaskBoard(el, showCompleted);
+        await showTaskBoard(el, showCompleted, resourceFilter);
       }
     } catch (err) {
       alert(`Re-flow failed: ${err.message}`);
@@ -142,7 +161,7 @@ async function showTaskBoard(el, showCompleted = false) {
       }
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, patch);
-        await showTaskBoard(el, showCompleted);
+        await showTaskBoard(el, showCompleted, resourceFilter);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
@@ -152,7 +171,7 @@ async function showTaskBoard(el, showCompleted = false) {
       try {
         const nowPinned = btn.dataset.pinned === '1';
         await api.patch(`/tasks/${btn.dataset.id}`, { pinned: !nowPinned });
-        await showTaskBoard(el, showCompleted);
+        await showTaskBoard(el, showCompleted, resourceFilter);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
@@ -167,6 +186,7 @@ registerView('/tasks', async (el, params = {}) => {
       await showTaskBoard(el, false);
     }
   } else {
-    await showTaskBoard(el, false);
+    const rid = params.resource ? parseInt(params.resource) : null;
+    await showTaskBoard(el, false, rid);
   }
 });
