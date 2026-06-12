@@ -468,11 +468,11 @@ input[readonly] {
 }
 
 .util-cell {
-  width: 28px;
-  min-width: 28px;
-  max-width: 28px;
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
   text-align: center;
-  font-size: 9px;
+  font-size: 0.85rem;
   font-weight: 600;
   padding: 0;
   height: 44px;

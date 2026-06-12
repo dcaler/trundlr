@@ -1,7 +1,7 @@
-"""Integration tests for the utilization dashboard.
+"""Integration tests for the hours-based utilization dashboard.
 
-All resources use a 1-task-at-a-time model: capacity=1 per available day.
-Committed = count of concurrent tasks. Conflict when committed > 1.
+Capacity = available hours/day; committed = assigned task-hours.
+A day is over-allocated (a conflict) when committed > capacity.
 """
 
 import pytest
@@ -36,9 +36,9 @@ def client():
 def mk_project(c):
     return c.post("/api/projects/", json={"name": "P"}).json()
 
-def mk_resource(c, name, kind, available_days=31):
+def mk_resource(c, name, kind, available_days=31, available_from="09:00", available_to="17:00"):
     body = {"name": name, "kind": kind,
-            "available_from": "00:00", "available_to": "23:59",
+            "available_from": available_from, "available_to": available_to,
             "available_days": available_days}
     return c.post("/api/resources/", json=body).json()
 
@@ -51,40 +51,43 @@ def mk_task(c, proj_id, res_id, start, end, title="T"):
 
 # ── /api/utilization ─────────────────────────────────────────────────────────
 
-def test_overbooked_days_show_over_100_pct(client):
-    """3 tasks on a resource → committed=3, capacity=1 → 300%."""
+def test_overbooked_day_shows_negative_net(client):
+    """Two 8h tasks on an 8h day → committed 16, capacity 8, net −8."""
     proj = mk_project(client)
     gpu  = mk_resource(client, "GPU", "gpu", available_days=127)
-    for i in range(3):
-        mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-02", f"T{i}")
+    for i in range(2):
+        mk_task(client, proj["id"], gpu["id"], "2026-06-01T09:00:00", "2026-06-01T17:00:00", f"T{i}")
 
-    resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-03"})
+    resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-02"})
     assert resp.status_code == 200
     gpu_entry = next(r for r in resp.json() if r["resource_id"] == gpu["id"])
     by_day = {d["day"]: d for d in gpu_entry["days"]}
 
-    assert by_day["2026-06-01"]["utilization"] == pytest.approx(300.0)
-    assert by_day["2026-06-02"]["utilization"] == pytest.approx(300.0)
-    assert by_day["2026-06-03"]["utilization"] == pytest.approx(0.0)
+    assert by_day["2026-06-01"]["committed"] == pytest.approx(16.0)
+    assert by_day["2026-06-01"]["capacity"] == pytest.approx(8.0)
+    assert by_day["2026-06-01"]["net"] == pytest.approx(-8.0)
+    assert by_day["2026-06-02"]["net"] == pytest.approx(8.0)  # nothing assigned → full spare
 
 
-def test_fully_booked_shows_exactly_100_pct(client):
-    """1 task on resource → committed=1, capacity=1 → 100% (not a conflict)."""
+def test_at_capacity_shows_zero_net(client):
+    """One 8h task on an 8h day → committed 8, capacity 8, net 0."""
     proj = mk_project(client)
     gpu  = mk_resource(client, "GPU", "gpu", available_days=127)
-    mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-01", "Solo")
+    mk_task(client, proj["id"], gpu["id"], "2026-06-01T09:00:00", "2026-06-01T17:00:00", "Solo")
 
     resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-01"})
     gpu_entry = next(r for r in resp.json() if r["resource_id"] == gpu["id"])
-    assert gpu_entry["days"][0]["utilization"] == pytest.approx(100.0)
-    assert gpu_entry["days"][0]["committed"] == pytest.approx(1.0)
+    day = gpu_entry["days"][0]
+    assert day["committed"] == pytest.approx(8.0)
+    assert day["net"] == pytest.approx(0.0)
 
 
-def test_empty_resource_shows_zero_utilization(client):
-    mk_resource(client, "Idle", "human")
-    resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-03"})
+def test_idle_resource_shows_full_spare(client):
+    mk_resource(client, "Idle", "human")  # Mon-Fri 8h
+    resp = client.get("/api/utilization", params={"from": "2026-06-01", "to": "2026-06-01"})  # Mon
     idle = next(r for r in resp.json() if r["resource_name"] == "Idle")
-    assert all(d["utilization"] == pytest.approx(0.0) for d in idle["days"])
+    assert idle["days"][0]["committed"] == pytest.approx(0.0)
+    assert idle["days"][0]["net"] == pytest.approx(8.0)
 
 
 def test_utilization_includes_all_resources(client):
@@ -105,31 +108,27 @@ def test_utilization_day_count_matches_range(client):
 # ── /api/resources/{id}/conflicts ────────────────────────────────────────────
 
 def test_conflict_endpoint_flags_overbooked_days(client):
-    """3 tasks on resource → committed=3 > capacity=1 → conflict days flagged."""
     proj = mk_project(client)
     gpu  = mk_resource(client, "GPU", "gpu", available_days=127)
-    for i in range(3):
-        mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-02", f"T{i}")
+    for i in range(2):
+        mk_task(client, proj["id"], gpu["id"], "2026-06-01T09:00:00", "2026-06-01T17:00:00", f"T{i}")
 
     resp = client.get(
         f"/api/resources/{gpu['id']}/conflicts",
         params={"from": "2026-06-01", "to": "2026-06-03"},
     )
     assert resp.status_code == 200
-    conflicts = resp.json()
-    flagged = {c["day"] for c in conflicts}
-
+    flagged = {c["day"] for c in resp.json()}
     assert "2026-06-01" in flagged
-    assert "2026-06-02" in flagged
+    assert "2026-06-02" not in flagged
     assert "2026-06-03" not in flagged
 
 
 def test_conflict_shows_contributing_tasks(client):
     proj = mk_project(client)
     gpu  = mk_resource(client, "GPU", "gpu", available_days=127)
-    mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-01", "Alpha")
-    mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-01", "Beta")
-    mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-01", "Gamma")
+    for title in ("Alpha", "Beta", "Gamma"):
+        mk_task(client, proj["id"], gpu["id"], "2026-06-01T09:00:00", "2026-06-01T17:00:00", title)
 
     conflicts = client.get(
         f"/api/resources/{gpu['id']}/conflicts",
@@ -140,11 +139,10 @@ def test_conflict_shows_contributing_tasks(client):
     assert titles == {"Alpha", "Beta", "Gamma"}
 
 
-def test_fully_booked_not_flagged_as_conflict(client):
-    """1 task = 100% = NOT a conflict."""
+def test_at_capacity_not_flagged_as_conflict(client):
     proj = mk_project(client)
     gpu  = mk_resource(client, "GPU", "gpu", available_days=127)
-    mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-01", "Solo")
+    mk_task(client, proj["id"], gpu["id"], "2026-06-01T09:00:00", "2026-06-01T17:00:00", "Solo")
 
     conflicts = client.get(
         f"/api/resources/{gpu['id']}/conflicts",
@@ -154,35 +152,14 @@ def test_fully_booked_not_flagged_as_conflict(client):
 
 
 def test_conflict_overage_value(client):
-    """3 tasks on resource → overage = 3 − 1 = 2."""
+    """Three 8h tasks on an 8h day → overage = 24 − 8 = 16h."""
     proj = mk_project(client)
     gpu  = mk_resource(client, "GPU", "gpu", available_days=127)
     for i in range(3):
-        mk_task(client, proj["id"], gpu["id"], "2026-06-01", "2026-06-01", f"T{i}")
+        mk_task(client, proj["id"], gpu["id"], "2026-06-01T09:00:00", "2026-06-01T17:00:00", f"T{i}")
 
     conflicts = client.get(
         f"/api/resources/{gpu['id']}/conflicts",
         params={"from": "2026-06-01", "to": "2026-06-01"},
     ).json()
-    assert conflicts[0]["overage"] == pytest.approx(2.0)
-
-
-def test_two_concurrent_tasks_flagged(client):
-    """2 tasks on same resource/day → conflict."""
-    proj = mk_project(client)
-    alice = mk_resource(client, "Alice", "human")
-    mk_task(client, proj["id"], alice["id"], "2026-06-02", "2026-06-02", "A")
-    mk_task(client, proj["id"], alice["id"], "2026-06-02", "2026-06-02", "B")
-
-    resp = client.get("/api/utilization", params={"from": "2026-06-02", "to": "2026-06-02"})
-    alice_entry = next(r for r in resp.json() if r["resource_id"] == alice["id"])
-    day = alice_entry["days"][0]
-    assert day["committed"] == pytest.approx(2.0)
-    assert day["utilization"] == pytest.approx(200.0)
-
-    conflicts = client.get(
-        f"/api/resources/{alice['id']}/conflicts",
-        params={"from": "2026-06-02", "to": "2026-06-02"},
-    ).json()
-    assert len(conflicts) == 1
-    assert conflicts[0]["day"] == "2026-06-02"
+    assert conflicts[0]["overage"] == pytest.approx(16.0)

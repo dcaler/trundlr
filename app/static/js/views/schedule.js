@@ -2,7 +2,7 @@
 
 const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
 let   GANTT_LABEL_W    = 160; // pinned label-column width (px); recomputed per render
-const UTIL_DAY_W       = 28;  // must match .gantt-day-th / .util-cell width in CSS
+const UTIL_DAY_W       = 96;  // utilization heatmap day-cell width (~10 days on a desktop)
 
 function isMobileSchedule() {
   return window.matchMedia('(max-width: 640px)').matches;
@@ -490,55 +490,79 @@ function buildDateHeader(dates, today) {
   ).join('');
 
   const row2 = dates.map(d => {
-    const day = parseInt(d.slice(8), 10);
-    return `<th class="gantt-day-th${d === today ? ' gantt-today' : ''}">${day}</th>`;
+    const [y, mo, dd] = d.split('-').map(Number);
+    const wd  = new Date(y, mo - 1, dd).toLocaleDateString('en-US', { weekday: 'short' });
+    return `<th class="gantt-day-th${d === today ? ' gantt-today' : ''}" style="width:${UTIL_DAY_W}px;min-width:${UTIL_DAY_W}px;max-width:${UTIL_DAY_W}px">${wd} ${dd}</th>`;
   }).join('');
 
   return `<tr><th class="gantt-label-th"></th>${row1}</tr>
           <tr><th class="gantt-label-th"></th>${row2}</tr>`;
 }
 
-function utilizationColor(pct) {
-  if (pct <= 0)   return { bg: '#f8f9fa', fg: '#adb5bd' }; // empty
-  if (pct < 100)  return { bg: '#d1e7dd', fg: '#0a3622' }; // partial (unavailable day with 0 committed: shouldn't show, but safe)
-  if (pct === 100) return { bg: '#fd7e14', fg: 'white' };  // exactly 1 task
-  return { bg: '#dc3545', fg: 'white' };                   // >1 task = conflict
+const UTIL_TOL = 0.05; // hours within which committed ≈ capacity counts as "at capacity"
+
+// Format a net-hours value rounded to ≤1 decimal: "+2", "0", "−3".
+function fmtNetHours(net) {
+  const r = Math.round(net * 10) / 10;
+  const mag = Number.isInteger(r) ? Math.abs(r) : Math.abs(r).toFixed(1);
+  if (r > 0) return `+${mag}`;
+  if (r < 0) return `−${mag}`; // minus sign
+  return '0';
+}
+
+// Cell appearance from (committed, capacity) hours. Washed-out colors:
+// blue = under capacity (spare), green = at capacity, red = over (conflict).
+function netCellInfo(committed, capacity) {
+  if (capacity === 0 && committed === 0) {
+    return { label: '', bg: '#f8f9fa', fg: '#adb5bd', conflict: false }; // unavailable / empty
+  }
+  const net = capacity - committed;
+  if (net < -UTIL_TOL) return { label: fmtNetHours(net), bg: 'rgba(220,53,69,0.09)',  fg: '#842029', conflict: true  }; // over
+  if (net >  UTIL_TOL) return { label: fmtNetHours(net), bg: 'rgba(13,110,253,0.06)',  fg: '#0a467e', conflict: false }; // under
+  return                      { label: '0',              bg: 'rgba(25,135,84,0.09)',   fg: '#0a3622', conflict: false }; // at
+}
+
+// Forward-looking capacity summary for the coming 10 days from today.
+function forwardSummary(days, today) {
+  const fwd = days.filter(d => d.day >= today).slice(0, 10);
+  if (!fwd.length) return '';
+  let over = 0, spare = 0;
+  for (const d of fwd) {
+    const net = d.capacity - d.committed;
+    if (net < 0) over += -net; else spare += net;
+  }
+  const n = fwd.length;
+  if (over > UTIL_TOL) {
+    return `<small style="color:var(--danger)">⚠ Over by ${over.toFixed(1)}h · next ${n}d</small>`;
+  }
+  return `<small style="color:var(--text-muted)">${spare.toFixed(1)}h spare · next ${n}d</small>`;
 }
 
 function buildUtilResourceRow(resource, conflictsByDay, today) {
   const days = resource.days;
-  const peakPct = days.reduce((mx, d) => Math.max(mx, d.utilization), 0);
-  const conflictCount = days.filter(d => d.committed > d.capacity).length;
 
   const cells = days.map(day => {
-    const isConflict = day.committed > day.capacity;
-    const colors = utilizationColor(day.utilization);
-    const pctRounded = Math.round(day.utilization);
-    const label = pctRounded > 0 ? (isConflict ? `!${pctRounded}` : String(pctRounded)) : '';
+    const info = netCellInfo(day.committed, day.capacity);
 
-    let tooltip = `${day.day}: ${day.committed.toFixed(1)}/${day.capacity.toFixed(1)} = ${pctRounded}%`;
+    let tooltip = `${day.day}: ${day.committed.toFixed(1)}h assigned / ${day.capacity.toFixed(1)}h available`;
     const cdata = conflictsByDay[day.day];
-    if (isConflict && cdata) {
+    if (info.conflict && cdata) {
       const names = cdata.tasks.map(t => t.title).join(', ');
-      tooltip += `\n⚠ Over by ${cdata.overage.toFixed(1)} — ${names}`;
+      tooltip += `\n⚠ Over by ${cdata.overage.toFixed(1)}h — ${names}`;
     }
 
     const todayCls    = day.day === today ? ' gantt-today' : '';
-    const conflictCls = isConflict ? ' util-conflict' : '';
+    const conflictCls = info.conflict ? ' util-conflict' : '';
 
     return `<td class="util-cell${conflictCls}${todayCls}"
-                 style="background:${colors.bg};color:${colors.fg}"
-                 title="${escHtml(tooltip)}">${label}</td>`;
+                 style="background:${info.bg};color:${info.fg}"
+                 title="${escHtml(tooltip)}">${info.label}</td>`;
   }).join('');
-
-  const summaryHtml = conflictCount > 0
-    ? `<small style="color:var(--danger)">⚠ ${conflictCount} conflict day${conflictCount !== 1 ? 's' : ''}</small>`
-    : `<small style="color:var(--text-muted)">Peak: ${Math.round(peakPct)}%</small>`;
 
   return `<tr>
     <td class="gantt-label-td util-label-td">
       <div style="font-weight:600">${escHtml(resource.resource_name)}</div>
-      ${summaryHtml}
+      ${forwardSummary(days, today)}
     </td>
     ${cells}
   </tr>`;
@@ -555,10 +579,10 @@ function buildUtilHtml(utilData, conflictsMap, dates, today) {
 
   return `
     <div class="gantt-legend" style="margin-top:0.75rem">
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#f8f9fa;border:1px solid #dee2e6"></span>Free</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#fd7e14"></span>1 task</span>
-      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:#dc3545"></span>2+ tasks ⚠</span>
-      <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Hover a cell for details</span>
+      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(13,110,253,0.06);border:1px solid #dee2e6"></span>Under (spare h)</span>
+      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(25,135,84,0.09);border:1px solid #dee2e6"></span>At capacity</span>
+      <span class="gantt-legend-item"><span class="gantt-swatch" style="background:rgba(220,53,69,0.09);border:1px solid #dee2e6"></span>Over ⚠</span>
+      <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto">Cells show spare (+) / over (−) hours · hover for detail</span>
     </div>
     <div class="gantt-scroll-wrapper">
       <table class="gantt-table" style="width:${GANTT_LABEL_W + dates.length * UTIL_DAY_W}px">
