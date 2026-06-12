@@ -320,6 +320,38 @@ input[readonly] {
   font-style: italic;
 }
 
+/* Per-resource name row — hidden on desktop (name lives in the pinned label
+   column), shown on mobile above each track. .gantt-name-inner is pinned to
+   the visible-left edge via the same translateX scroll sync as label cells. */
+.gantt-name-row { display: none; }
+
+.gantt-name-td {
+  padding: 0;
+  background: #f1f3f5;
+  border-bottom: 1px solid var(--border);
+}
+
+.gantt-name-inner {
+  display: inline-block;
+  position: relative;
+  z-index: 3;
+  max-width: 92vw;
+  padding: 3px 8px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: #f1f3f5;
+  border-radius: 0 4px 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gantt-name-inner.gantt-unassigned {
+  font-weight: 400;
+  font-style: italic;
+}
+
 /* Date header cells */
 .gantt-month-th {
   background: #f1f3f5;
@@ -464,25 +496,23 @@ input[readonly] {
 }
 
 @media (max-width: 640px) {
-  /* Reclaim timeline space: the pinned resource-name column shrinks from 160px.
-     JS reads this var so the now-line / table-width math stays in sync. */
+  /* Utilization heatmap keeps a (narrower) label column. */
   :root {
-    --gantt-label-w: 84px;
+    --gantt-label-w: 96px;
   }
 
-  .gantt-label-td,
-  .gantt-label-th {
-    padding: 0 0.4rem;
-    font-size: 0.75rem;
-  }
+  .util-label-td { padding: 0.4rem !important; }
+  .util-label-td small { display: none; }  /* drop the "Peak %"/conflict line */
 
-  .util-label-td {
-    padding: 0.4rem !important;
+  /* Timeline tab: collapse the pinned label column to zero and surface each
+     resource name on its own full-width row instead (.gantt-name-row). */
+  .gantt-timeline { --gantt-label-w: 0px; }
+  .gantt-timeline .gantt-label-td,
+  .gantt-timeline .gantt-label-th {
+    padding: 0;
+    border-right: 0;
   }
-
-  .util-label-td small {
-    display: none;  /* drop the "Peak %"/conflict line — no room at 84px */
-  }
+  .gantt-timeline .gantt-name-row { display: table-row; }
 
   nav {
     flex-wrap: wrap;
