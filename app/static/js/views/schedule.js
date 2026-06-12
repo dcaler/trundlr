@@ -122,9 +122,12 @@ async function realignSchedule(resources, tasks, projects) {
     return c;
   };
 
+  // Per-resource scheduling context: pinned obstacles, blockouts, and a cursor
+  // that PERSISTS across sweeps so a dependency chain crossing resources can
+  // settle (e.g. a cycle's steps: Cale → GPU → Cale).
+  const ctx = new Map();
   for (const resource of resources) {
     const onResource = t => (t.resource_ids || []).includes(resource.id);
-    const blockouts  = blockoutsByResource[resource.id] || [];
 
     // Pinned todo tasks keep their existing dates.
     // Build obstacle list from ALL pinned tasks on this resource — regardless of
@@ -143,72 +146,87 @@ async function realignSchedule(resources, tasks, projects) {
       end:   new Date(t.end_date).getTime(),
     }));
 
-    // Only todo tasks are moved; already-claimed tasks (from earlier resource iterations) are skipped
-    const movable = tasks
-      .filter(t => onResource(t) && t.status === 'todo' && !t.pinned && !patchMap.has(t.id))
-      .sort((a, b) => {
-        const pa = priorityByProject[a.project_id] || 3;
-        const pb = priorityByProject[b.project_id] || 3;
-        return pa !== pb ? pa - pb : a.id - b.id; // stable tiebreaker → idempotent
-      });
-
-    if (!movable.length) continue;
-
     // Cursor floor: after the last in-flight task (in_progress/done/failed only;
     // blocked tasks are ignored and don't occupy queue space).
     const fixedTasks = tasks.filter(t => onResource(t) && t.end_date && !['todo', 'blocked'].includes(t.status));
     const fixedEnd   = fixedTasks.reduce((mx, t) => Math.max(mx, new Date(t.end_date).getTime()), 0);
 
-    let cursor = Math.max(fixedEnd, Date.now());
+    ctx.set(resource.id, {
+      blockouts: blockoutsByResource[resource.id] || [],
+      pinnedSlots,
+      cursor: Math.max(fixedEnd, Date.now()),
+    });
+  }
 
-    console.log(`[realign] ${resource.name}: fixedEnd=${fixedEnd ? new Date(fixedEnd).toISOString() : 'none'} (${fixedTasks.length} fixed), cursor=${new Date(cursor).toISOString()}, movable=[${movable.map(t => `#${t.id}`).join(',')}]`);
+  // Greedy scheduler swept to a fixpoint. Each sweep places every task whose
+  // dependency is already resolved; a task whose prerequisite lives on another
+  // resource (not yet placed) is deferred to a later sweep, once that
+  // prerequisite lands in patchMap. Repeats until a full sweep places nothing —
+  // this is what lets a cycle's steps chain across different resources.
+  let progress = true;
+  for (let sweep = 0; progress && sweep < 1000; sweep++) {
+    progress = false;
+    for (const resource of resources) {
+      const onResource = t => (t.resource_ids || []).includes(resource.id);
+      const c = ctx.get(resource.id);
 
-    // Greedy scheduler: at each cursor position pick the highest-priority task
-    // whose dependency is already satisfied.  When nothing is ready, jump the
-    // cursor to the earliest dep-resolution point so lower-priority free tasks
-    // can backfill gaps left by constrained high-priority tasks.
-    const remaining = [...movable];
-    for (let guard = 0; remaining.length && guard < 1000; guard++) {
-      const idx = remaining.findIndex(t =>
-        !t.depends_on_id || resolvedEnd(t.depends_on_id) <= cursor
-      );
+      // Rebuilt each sweep so tasks placed by other resources are excluded.
+      const remaining = tasks
+        .filter(t => onResource(t) && t.status === 'todo' && !t.pinned && !patchMap.has(t.id))
+        .sort((a, b) => {
+          const pa = priorityByProject[a.project_id] || 3;
+          const pb = priorityByProject[b.project_id] || 3;
+          return pa !== pb ? pa - pb : a.id - b.id; // stable tiebreaker → idempotent
+        });
+      if (!remaining.length) continue;
 
-      if (idx === -1) {
-        // Nothing ready yet — jump to earliest dependency resolution
-        const nextMs = Math.min(...remaining
-          .filter(t => t.depends_on_id)
-          .map(t => resolvedEnd(t.depends_on_id)));
-        if (!isFinite(nextMs) || nextMs <= cursor) break;
-        cursor = nextMs;
-        continue;
-      }
+      for (let guard = 0; remaining.length && guard < 1000; guard++) {
+        const idx = remaining.findIndex(t =>
+          !t.depends_on_id || resolvedEnd(t.depends_on_id) <= c.cursor
+        );
 
-      const task = remaining.splice(idx, 1)[0];
-      const dur = task.start_date && task.end_date
-        ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
-        : (task.duration || 1) * 3600000;
-
-      if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
-
-      // Advance past window gaps and pinned slots, iterating until stable —
-      // skipping a pinned slot may push cursor outside the availability window.
-      for (let adj = 0; adj < 100; adj++) {
-        const before = cursor;
-        cursor = nextSlotInWindow(cursor, resource, blockouts);
-        cursor = skipPinned(cursor, dur, pinnedSlots);
-        if (cursor === before) break;
-      }
-      // Fit-to-window: don't split a task across a day boundary (human/ai only).
-      if (resource.kind === 'human' || resource.kind === 'ai') {
-        const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
-        if (cursor + dur > wE && cursor > wS) {
-          cursor = nextSlotInWindow(wE, resource, blockouts);
-          cursor = skipPinned(cursor, dur, pinnedSlots);
+        if (idx === -1) {
+          // Nothing ready at the cursor. If a remaining task depends on an
+          // already-resolved (finite) end in the future, jump the cursor there so
+          // lower-priority free tasks can backfill. Otherwise every remaining dep
+          // is still unplaced (Infinity) → leave them for a later sweep.
+          const futures = remaining
+            .filter(t => t.depends_on_id)
+            .map(t => resolvedEnd(t.depends_on_id))
+            .filter(ms => isFinite(ms) && ms > c.cursor);
+          if (!futures.length) break;
+          c.cursor = Math.min(...futures);
+          continue;
         }
-      }
 
-      patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
-      cursor += dur;
+        const task = remaining.splice(idx, 1)[0];
+        const dur = task.start_date && task.end_date
+          ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
+          : (task.duration || 1) * 3600000;
+
+        if (task.depends_on_id) c.cursor = Math.max(c.cursor, resolvedEnd(task.depends_on_id));
+
+        // Advance past window gaps and pinned slots, iterating until stable —
+        // skipping a pinned slot may push cursor outside the availability window.
+        for (let adj = 0; adj < 100; adj++) {
+          const before = c.cursor;
+          c.cursor = nextSlotInWindow(c.cursor, resource, c.blockouts);
+          c.cursor = skipPinned(c.cursor, dur, c.pinnedSlots);
+          if (c.cursor === before) break;
+        }
+        // Fit-to-window: don't split a task across a day boundary (human/ai only).
+        if (resource.kind === 'human' || resource.kind === 'ai') {
+          const wE = winEnd(c.cursor, resource), wS = winStart(c.cursor, resource);
+          if (c.cursor + dur > wE && c.cursor > wS) {
+            c.cursor = nextSlotInWindow(wE, resource, c.blockouts);
+            c.cursor = skipPinned(c.cursor, dur, c.pinnedSlots);
+          }
+        }
+
+        patchMap.set(task.id, { start: fmt(c.cursor), end: fmt(c.cursor + dur) });
+        c.cursor += dur;
+        progress = true;
+      }
     }
   }
 
