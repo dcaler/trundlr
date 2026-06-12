@@ -70,6 +70,25 @@ let appSettings = { timezone: 'UTC' };
 
 window.addEventListener('hashchange', navigate);
 window.addEventListener('DOMContentLoaded', async () => {
+  // Hamburger menu toggle for mobile
+  const navToggle = document.getElementById('nav-toggle');
+  const navLinks  = document.querySelector('.nav-links');
+  if (navToggle && navLinks) {
+    navToggle.addEventListener('click', () => {
+      const open = navLinks.classList.toggle('open');
+      navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      navToggle.textContent = open ? '✕' : '☰';
+    });
+    // Close the menu whenever a nav link is tapped
+    navLinks.addEventListener('click', e => {
+      if (e.target.tagName === 'A') {
+        navLinks.classList.remove('open');
+        navToggle.setAttribute('aria-expanded', 'false');
+        navToggle.textContent = '☰';
+      }
+    });
+  }
+
   // When a nav link is already the active hash, hashchange won't fire (the
   // URL doesn't change). Intercept clicks so we always re-render in that case
   // — e.g. navigating back to the Projects list from a project detail view.
