@@ -793,7 +793,10 @@ async function showSchedule(el) {
       };
       wrapper.addEventListener('scroll', syncLabels, { passive: true });
       const daysIn = schedDaysBetween(from, today);
-      wrapper.scrollLeft = Math.max(0, GANTT_LABEL_W + daysIn * UTIL_DAY_W - 100);
+      // Snap today's column flush against the pinned label column so it shows in
+      // full (its content-left is GANTT_LABEL_W + daysIn·UTIL_DAY_W; subtracting
+      // GANTT_LABEL_W lands its left edge exactly at the label's right edge).
+      wrapper.scrollLeft = Math.max(0, daysIn * UTIL_DAY_W);
       syncLabels();
     }
   }
