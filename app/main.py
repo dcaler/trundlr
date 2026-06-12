@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import apply_migrations, create_db_and_tables, init_engine
 from app.routers import projects, resources, schedule, settings, tasks
-from app.routers import caldav, runner
+from app.routers import caldav, cycles, runner
 
 STATIC_DIR = _APP_DIR / "static"
 
@@ -116,6 +116,7 @@ app.include_router(resources.router)
 app.include_router(tasks.router)
 app.include_router(schedule.router)
 app.include_router(settings.router)
+app.include_router(cycles.router)
 app.include_router(caldav.router)
 app.include_router(runner.router)
 

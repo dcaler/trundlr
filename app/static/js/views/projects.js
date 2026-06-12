@@ -250,11 +250,12 @@ async function showProjectsList(el, editingId = null) {
 
 async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
-  const [project, allTasks, resources, allProjects] = await Promise.all([
+  const [project, allTasks, resources, allProjects, cycleTemplates] = await Promise.all([
     api.get(`/projects/${projectId}`),
     api.get('/tasks/'),
     api.get('/resources/'),
     api.get('/projects/'),
+    api.get('/cycle-templates/'),
   ]);
   // tasks = only this project's tasks (for the task list); allTasks used for dependency lookup
   const tasks = allTasks.filter(t => t.project_id === projectId);
@@ -342,7 +343,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       <td>
         <button class="btn btn-ghost edit-task-btn" data-id="${t.id}" style="padding:0;text-align:left">${escHtml(t.title)}</button>
         ${t.description ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px">${escHtml(t.description)}</div>` : ''}
-        ${t.command ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px;font-family:monospace">$ ${escHtml(t.command)}</div>` : ''}
+        ${t.command ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:1px;font-family:monospace;max-width:60ch;white-space:pre-wrap;overflow-wrap:anywhere">$ ${escHtml(t.command)}</div>` : ''}
       </td>
       <td>
         <select class="status-select" data-id="${t.id}" style="font-size:0.8rem">
@@ -370,6 +371,18 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     <h1>${priorityBadge(project.priority)}${escHtml(project.name)}</h1>
     ${project.folder ? `<p style="color:var(--text-muted);margin-bottom:0.25rem"><strong>Directory:</strong> <code>${escHtml(project.folder)}</code></p>` : ''}
     ${project.description ? `<p style="color:var(--text-muted);margin-bottom:1rem">${escHtml(project.description)}</p>` : ''}
+
+    ${cycleTemplates.length ? `
+    <form id="add-cycle-form" class="form-row" style="margin-top:1.5rem;align-items:flex-end;gap:0.5rem">
+      <div>
+        <label>Add cycle</label>
+        <select name="template_id" style="width:200px">
+          ${cycleTemplates.map(t => `<option value="${t.id}">${escHtml(t.name)} (${t.steps.length} step${t.steps.length === 1 ? '' : 's'})</option>`).join('')}
+        </select>
+      </div>
+      <div><button type="submit" class="btn btn-primary">Add cycle</button></div>
+      <span style="font-size:0.85em;color:var(--text-muted)">Creates a numbered, chained batch of tasks.</span>
+    </form>` : ''}
 
     <h2 style="margin-top:1.5rem;margin-bottom:0.75rem">Add task</h2>
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
@@ -410,6 +423,18 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   if (scrollY !== null) requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'instant' }));
 
   el.querySelector('.back-btn').addEventListener('click', () => showProjectsList(el));
+
+  const cycleForm = el.querySelector('#add-cycle-form');
+  if (cycleForm) {
+    cycleForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const templateId = parseInt(new FormData(e.target).get('template_id'));
+      try {
+        await api.post(`/cycle-templates/${templateId}/instantiate`, { project_id: projectId });
+        await showProjectDetail(el, projectId);
+      } catch (err) { alert(`Error: ${err.message}`); }
+    });
+  }
 
   const addForm = el.querySelector('#add-task-form');
   setupAutoCalcEnd(addForm);

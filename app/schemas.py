@@ -259,6 +259,51 @@ class BlockoutRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CycleStepCreate(BaseModel):
+    title: NonEmptyStr
+    duration: Optional[PositiveFloat] = None
+    resource_ids: list[BodyId] = []
+    position: int = Field(default=0, ge=0)
+
+
+class CycleStepUpdate(BaseModel):
+    title: Optional[NonEmptyStr] = None
+    duration: Optional[PositiveFloat] = None
+    resource_ids: Optional[list[BodyId]] = None
+    position: Optional[int] = Field(default=None, ge=0)
+
+
+class CycleStepRead(BaseModel):
+    id: int
+    template_id: int
+    position: int
+    title: str
+    duration: Optional[float] = None
+    resource_ids: list[int] = []
+
+    model_config = {"from_attributes": True}
+
+
+class CycleTemplateCreate(BaseModel):
+    name: NonEmptyStr
+
+
+class CycleTemplateUpdate(BaseModel):
+    name: NonEmptyStr
+
+
+class CycleTemplateRead(BaseModel):
+    id: int
+    name: str
+    steps: list[CycleStepRead] = []
+
+    model_config = {"from_attributes": True}
+
+
+class CycleInstantiate(BaseModel):
+    project_id: BodyId
+
+
 class SettingsRead(BaseModel):
     timezone: str
     caldav_default_project_id: Optional[int] = None
