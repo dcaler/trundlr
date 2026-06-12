@@ -68,9 +68,9 @@ function nextSlotInWindow(cursorMs, resource, blockouts = []) {
 async function realignSchedule(resources, tasks, projects) {
   const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
 
-  // patchMap records ALL claimed tasks (changed or not) so shared tasks aren't
-  // double-scheduled when processed by a second resource.
-  const patchMap = new Map(); // id → {start, end}
+  // patchMap records every placed task (id → {start, end}); also the source of
+  // truth for dependency resolution and pinned tasks during scheduling.
+  const patchMap = new Map();
 
   const fmt = ms => {
     const d = new Date(ms);
@@ -122,17 +122,15 @@ async function realignSchedule(resources, tasks, projects) {
     return c;
   };
 
-  // Per-resource scheduling context: pinned obstacles, blockouts, and a cursor
-  // that PERSISTS across sweeps so a dependency chain crossing resources can
-  // settle (e.g. a cycle's steps: Cale → GPU → Cale).
-  const ctx = new Map();
+  // ── Global priority list-scheduler ─────────────────────────────────────────
+  // Per-resource obstacles (pinned + already-placed slots) and an earliest-start
+  // floor (after the last in-flight task, never before now).
+  const obstaclesByResource = new Map(); // resource.id → [{start,end} ms]
+  const floorByResource     = new Map(); // resource.id → ms
   for (const resource of resources) {
     const onResource = t => (t.resource_ids || []).includes(resource.id);
 
-    // Pinned todo tasks keep their existing dates.
-    // Build obstacle list from ALL pinned tasks on this resource — regardless of
-    // whether they were already added to patchMap by an earlier resource iteration
-    // (a pinned task shared across resources must block every resource's queue).
+    // Pinned todo tasks keep their existing dates and block the resource.
     const pinnedTasks = tasks.filter(t =>
       onResource(t) && t.status === 'todo' && t.pinned && t.start_date && t.end_date
     );
@@ -141,92 +139,91 @@ async function realignSchedule(resources, tasks, projects) {
         patchMap.set(t.id, { start: t.start_date, end: t.end_date, pinned: true });
       }
     }
-    const pinnedSlots = pinnedTasks.map(t => ({
+    const obstacles = pinnedTasks.map(t => ({
       start: new Date(t.start_date).getTime(),
       end:   new Date(t.end_date).getTime(),
     }));
 
-    // Cursor floor: after the last in-flight task (in_progress/done/failed only;
-    // blocked tasks are ignored and don't occupy queue space).
+    // Floor: after the last in-flight task (in_progress/done/failed); blocked ignored.
     const fixedTasks = tasks.filter(t => onResource(t) && t.end_date && !['todo', 'blocked'].includes(t.status));
     const fixedEnd   = fixedTasks.reduce((mx, t) => Math.max(mx, new Date(t.end_date).getTime()), 0);
 
-    ctx.set(resource.id, {
-      blockouts: blockoutsByResource[resource.id] || [],
-      pinnedSlots,
-      cursor: Math.max(fixedEnd, Date.now()),
-    });
+    obstaclesByResource.set(resource.id, obstacles);
+    floorByResource.set(resource.id, Math.max(fixedEnd, Date.now()));
   }
 
-  // Greedy scheduler swept to a fixpoint. Each sweep places every task whose
-  // dependency is already resolved; a task whose prerequisite lives on another
-  // resource (not yet placed) is deferred to a later sweep, once that
-  // prerequisite lands in patchMap. Repeats until a full sweep places nothing —
-  // this is what lets a cycle's steps chain across different resources.
-  let progress = true;
-  for (let sweep = 0; progress && sweep < 1000; sweep++) {
-    progress = false;
-    for (const resource of resources) {
-      const onResource = t => (t.resource_ids || []).includes(resource.id);
-      const c = ctx.get(resource.id);
+  const resourceById  = Object.fromEntries(resources.map(r => [r.id, r]));
+  const taskResources = t => (t.resource_ids || []).map(id => resourceById[id]).filter(Boolean);
 
-      // Rebuilt each sweep so tasks placed by other resources are excluded.
-      const remaining = tasks
-        .filter(t => onResource(t) && t.status === 'todo' && !t.pinned && !patchMap.has(t.id))
-        .sort((a, b) => {
-          const pa = priorityByProject[a.project_id] || 3;
-          const pb = priorityByProject[b.project_id] || 3;
-          return pa !== pb ? pa - pb : a.id - b.id; // stable tiebreaker → idempotent
-        });
-      if (!remaining.length) continue;
+  // Placeable once every dependency it has is already placed (resolves to a finite end).
+  const depsPlaced = t => !t.depends_on_id || isFinite(resolvedEnd(t.depends_on_id));
 
-      for (let guard = 0; remaining.length && guard < 1000; guard++) {
-        const idx = remaining.findIndex(t =>
-          !t.depends_on_id || resolvedEnd(t.depends_on_id) <= c.cursor
-        );
+  // Earliest a task could start: after its resources' floors, after now, and not
+  // before its dependency finishes.
+  const earliestStart = t => {
+    let s = Date.now();
+    for (const r of taskResources(t)) s = Math.max(s, floorByResource.get(r.id));
+    if (t.depends_on_id) s = Math.max(s, resolvedEnd(t.depends_on_id));
+    return s;
+  };
 
-        if (idx === -1) {
-          // Nothing ready at the cursor. If a remaining task depends on an
-          // already-resolved (finite) end in the future, jump the cursor there so
-          // lower-priority free tasks can backfill. Otherwise every remaining dep
-          // is still unplaced (Infinity) → leave them for a later sweep.
-          const futures = remaining
-            .filter(t => t.depends_on_id)
-            .map(t => resolvedEnd(t.depends_on_id))
-            .filter(ms => isFinite(ms) && ms > c.cursor);
-          if (!futures.length) break;
-          c.cursor = Math.min(...futures);
-          continue;
+  // Earliest in-window, obstacle-free slot of length `dur` across ALL of a task's
+  // resources (it occupies every assigned resource simultaneously).
+  const findSlot = (t, dur) => {
+    const trs = taskResources(t);
+    const resolve = startMs => {
+      let c = startMs;
+      for (let i = 0; i < 200; i++) {
+        const before = c;
+        for (const r of trs) {
+          c = nextSlotInWindow(c, r, blockoutsByResource[r.id] || []);
+          c = skipPinned(c, dur, obstaclesByResource.get(r.id));
         }
-
-        const task = remaining.splice(idx, 1)[0];
-        const dur = task.start_date && task.end_date
-          ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
-          : (task.duration || 1) * 3600000;
-
-        if (task.depends_on_id) c.cursor = Math.max(c.cursor, resolvedEnd(task.depends_on_id));
-
-        // Advance past window gaps and pinned slots, iterating until stable —
-        // skipping a pinned slot may push cursor outside the availability window.
-        for (let adj = 0; adj < 100; adj++) {
-          const before = c.cursor;
-          c.cursor = nextSlotInWindow(c.cursor, resource, c.blockouts);
-          c.cursor = skipPinned(c.cursor, dur, c.pinnedSlots);
-          if (c.cursor === before) break;
-        }
-        // Fit-to-window: don't split a task across a day boundary (human/ai only).
-        if (resource.kind === 'human' || resource.kind === 'ai') {
-          const wE = winEnd(c.cursor, resource), wS = winStart(c.cursor, resource);
-          if (c.cursor + dur > wE && c.cursor > wS) {
-            c.cursor = nextSlotInWindow(wE, resource, c.blockouts);
-            c.cursor = skipPinned(c.cursor, dur, c.pinnedSlots);
-          }
-        }
-
-        patchMap.set(task.id, { start: fmt(c.cursor), end: fmt(c.cursor + dur) });
-        c.cursor += dur;
-        progress = true;
+        if (c === before) break;
       }
+      return c;
+    };
+    let cursor = resolve(earliestStart(t));
+    // Fit-to-window: don't split a task across a day boundary on human/ai resources.
+    for (const r of trs) {
+      if (r.kind === 'human' || r.kind === 'ai') {
+        const wE = winEnd(cursor, r), wS = winStart(cursor, r);
+        if (cursor + dur > wE && cursor > wS) {
+          cursor = resolve(nextSlotInWindow(wE, r, blockoutsByResource[r.id] || []));
+        }
+      }
+    }
+    return cursor;
+  };
+
+  // Place tasks in strict priority order: at each step take the highest-priority
+  // task whose dependencies are all placed and drop it into its earliest feasible
+  // slot. Higher priorities are scheduled first (earliest completion); lower
+  // priorities then backfill the gaps left behind, but only where they fit — so
+  // they never push a higher-priority task later. A task whose dependency is never
+  // placed (e.g. an unresolved cross-resource cycle) simply stays unscheduled.
+  for (let guard = 0; guard < tasks.length + 5; guard++) {
+    const candidates = tasks.filter(t =>
+      t.status === 'todo' && !t.pinned && !patchMap.has(t.id) &&
+      taskResources(t).length && depsPlaced(t)
+    );
+    if (!candidates.length) break;
+    candidates.sort((a, b) => {
+      const pa = priorityByProject[a.project_id] || 3;
+      const pb = priorityByProject[b.project_id] || 3;
+      if (pa !== pb) return pa - pb;                 // priority first
+      const ea = earliestStart(a), eb = earliestStart(b);
+      if (ea !== eb) return ea - eb;                 // then earliest feasible
+      return a.id - b.id;                            // stable tiebreaker → idempotent
+    });
+    const task = candidates[0];
+    const dur = task.start_date && task.end_date
+      ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
+      : (task.duration || 1) * 3600000;
+    const slot = findSlot(task, dur);
+    patchMap.set(task.id, { start: fmt(slot), end: fmt(slot + dur) });
+    for (const r of taskResources(task)) {
+      obstaclesByResource.get(r.id).push({ start: slot, end: slot + dur });
     }
   }
 
