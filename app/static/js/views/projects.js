@@ -144,7 +144,7 @@ async function showProjectsList(el, editingId = null) {
     }
     return `<tr>
       <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${priorityBadge(p.priority)}${escHtml(p.name)}</button></td>
-      <td style="color:var(--text-muted)">${escHtml(p.folder || '—')}</td>
+      <td class="proj-dir-col" style="color:var(--text-muted)">${escHtml(p.folder || '—')}</td>
       <td style="color:var(--text-muted)">${escHtml(p.description || '—')}</td>
       <td style="white-space:nowrap;text-align:right">
         <button class="btn btn-ghost edit-project-btn" data-id="${p.id}" title="Edit">✎</button>
@@ -172,7 +172,7 @@ async function showProjectsList(el, editingId = null) {
       ? '<p style="color:var(--text-muted)">No projects yet — create one above.</p>'
       : `<table>
           <thead><tr>
-            <th>Name</th><th>Directory</th><th>Description</th><th style="width:160px"></th>
+            <th>Name</th><th class="proj-dir-col">Directory</th><th>Description</th><th style="width:160px"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`}

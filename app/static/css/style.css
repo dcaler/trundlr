@@ -591,6 +591,11 @@ input[readonly] {
     -webkit-overflow-scrolling: touch;
   }
 
+  /* Projects list: drop the Directory column — low value on a phone */
+  .proj-dir-col {
+    display: none;
+  }
+
   /* Forms stack vertically. !important overrides the inline width:NNNpx
      styles set on individual inputs, which would otherwise overflow. */
   .form-row {
