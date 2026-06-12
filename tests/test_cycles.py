@@ -41,7 +41,8 @@ def seeded(client):
     for i, title in enumerate(["Init", "Gather", "Collect", "Draft", "Review"]):
         client.post(
             f"/api/cycle-templates/{template['id']}/steps",
-            json={"title": title, "duration": 2, "resource_ids": [resource["id"]], "position": i},
+            json={"title": title, "duration": 2, "command": f"run {title.lower()}",
+                  "resource_ids": [resource["id"]], "position": i},
         )
     return client, project["id"], resource["id"], template["id"]
 
@@ -105,9 +106,10 @@ class TestInstantiate:
         # first step has no dependency; each subsequent depends on the previous
         assert tasks[0]["depends_on_id"] is None
         assert all(tasks[i]["depends_on_id"] == tasks[i - 1]["id"] for i in range(1, len(tasks)))
-        # duration + resources copied from the template; no dates
+        # duration + command + resources copied from the template; no dates
         assert all(t["duration"] == 2.0 for t in tasks)
         assert all(t["resource_ids"] == [rid] for t in tasks)
+        assert tasks[0]["command"] == "run init" and tasks[3]["command"] == "run draft"
         assert all(t["start_date"] is None and t["end_date"] is None for t in tasks)
 
     def test_second_cycle_increments_and_starts_independent(self, seeded):

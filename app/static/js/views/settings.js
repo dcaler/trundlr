@@ -118,6 +118,7 @@ async function renderCyclesSection(container, resources) {
         <td style="color:var(--text-muted)">${i + 1}</td>
         <td><input name="title" value="${escHtml(s.title)}" style="width:140px"></td>
         <td><input name="duration" type="number" min="0.01" step="any" value="${s.duration ?? ''}" placeholder="—" style="width:70px"></td>
+        <td><input name="command" value="${escHtml(s.command ?? '')}" placeholder="shell command (optional)" style="width:220px;font-family:monospace"></td>
         <td>${stepResourceChecks(resources, s.resource_ids || [])}</td>
         <td style="white-space:nowrap;text-align:right">
           <button class="btn btn-ghost save-step-btn" title="Save">💾</button>
@@ -135,7 +136,7 @@ async function renderCyclesSection(container, resources) {
         </div>
         <table style="width:100%">
           <thead><tr>
-            <th style="width:24px">#</th><th>Step</th><th>Duration (h)</th><th>Resources</th><th style="width:90px"></th>
+            <th style="width:24px">#</th><th>Step</th><th>Duration (h)</th><th>Command</th><th>Resources</th><th style="width:90px"></th>
           </tr></thead>
           <tbody>
             ${stepRows || ''}
@@ -143,6 +144,7 @@ async function renderCyclesSection(container, resources) {
               <td style="color:var(--text-muted)">+</td>
               <td><input name="title" placeholder="New step" style="width:140px"></td>
               <td><input name="duration" type="number" min="0.01" step="any" placeholder="—" style="width:70px"></td>
+              <td><input name="command" placeholder="shell command (optional)" style="width:220px;font-family:monospace"></td>
               <td>${stepResourceChecks(resources, [])}</td>
               <td style="text-align:right"><button class="btn btn-primary add-step-btn">Add step</button></td>
             </tr>
@@ -194,6 +196,7 @@ async function renderCyclesSection(container, resources) {
         return {
           title: row.querySelector('[name="title"]').value.trim(),
           duration: durRaw ? parseFloat(durRaw) : null,
+          command: row.querySelector('[name="command"]').value.trim() || null,
           resource_ids: [...row.querySelectorAll('[name="resource_ids"]:checked')].map(c => parseInt(c.value)),
         };
       };
@@ -219,6 +222,7 @@ async function renderCyclesSection(container, resources) {
         await api.post(`/cycle-templates/${tid}/steps`, {
           title,
           duration: durRaw ? parseFloat(durRaw) : null,
+          command: addRow.querySelector('[name="command"]').value.trim() || null,
           resource_ids: [...addRow.querySelectorAll('[name="resource_ids"]:checked')].map(c => parseInt(c.value)),
           position: stepCount,
         });

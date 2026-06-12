@@ -144,6 +144,7 @@ def add_step(
         template_id=template_id,
         title=data.title,
         duration=data.duration,
+        command=data.command,
         position=data.position,
     )
     session.add(step)
@@ -227,6 +228,7 @@ def instantiate_cycle(
         task = Task(
             title=f"{step.title} {n}",
             duration=step.duration,
+            command=step.command,
             status=TaskStatus.todo,
             project_id=data.project_id,
             depends_on_id=prev_id,  # chain each step to the previous; first is None

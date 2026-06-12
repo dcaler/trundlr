@@ -262,6 +262,7 @@ class BlockoutRead(BaseModel):
 class CycleStepCreate(BaseModel):
     title: NonEmptyStr
     duration: Optional[PositiveFloat] = None
+    command: Optional[str] = None
     resource_ids: list[BodyId] = []
     position: int = Field(default=0, ge=0)
 
@@ -269,6 +270,7 @@ class CycleStepCreate(BaseModel):
 class CycleStepUpdate(BaseModel):
     title: Optional[NonEmptyStr] = None
     duration: Optional[PositiveFloat] = None
+    command: Optional[str] = None
     resource_ids: Optional[list[BodyId]] = None
     position: Optional[int] = Field(default=None, ge=0)
 
@@ -279,6 +281,7 @@ class CycleStepRead(BaseModel):
     position: int
     title: str
     duration: Optional[float] = None
+    command: Optional[str] = None
     resource_ids: list[int] = []
 
     model_config = {"from_attributes": True}
