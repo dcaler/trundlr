@@ -30,27 +30,32 @@ function setActiveNav(hash) {
 }
 
 async function navigate() {
-  const hash = location.hash.slice(1) || '/projects';
+  const raw = location.hash.slice(1) || '/projects';
   const el = document.getElementById('app');
 
-  let view   = views[hash];
-  let params = {};
+  // Split off any ?query=string  e.g. /tasks?resource=3
+  const qIdx  = raw.indexOf('?');
+  const path  = qIdx === -1 ? raw : raw.slice(0, qIdx);
+  const query = Object.fromEntries(new URLSearchParams(qIdx === -1 ? '' : raw.slice(qIdx + 1)));
+
+  let view   = views[path];
+  let params = { ...query };
 
   // Parameterized route: /base/id  e.g. /projects/42
   if (!view) {
-    const cut = hash.indexOf('/', 1);
+    const cut = path.indexOf('/', 1);
     if (cut !== -1) {
-      const base = hash.slice(0, cut);
-      const id   = parseInt(hash.slice(cut + 1));
+      const base = path.slice(0, cut);
+      const id   = parseInt(path.slice(cut + 1));
       if (!isNaN(id) && views[base]) {
         view   = views[base];
-        params = { id };
+        params = { ...query, id };
       }
     }
   }
 
   // Highlight the base nav item when on a deep-link sub-path
-  setActiveNav(params.id ? hash.slice(0, hash.lastIndexOf('/')) : hash);
+  setActiveNav(params.id ? path.slice(0, path.lastIndexOf('/')) : path);
 
   if (!view) view = views['/projects'];
   if (!view) { el.innerHTML = '<p class="error">Page not found.</p>'; return; }
