@@ -455,3 +455,122 @@ input[readonly] {
   outline: 2px solid #dc3545;
   outline-offset: -2px;
 }
+
+/* ── Mobile / responsive ─────────────────────────────────────────────────── */
+
+.nav-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  nav {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--nav-height);
+    gap: 0;
+    padding: 0 1rem;
+    align-items: center;
+  }
+
+  .nav-brand {
+    flex: 1;
+  }
+
+  .nav-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.2);
+    color: white;
+    font-size: 1.1rem;
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+
+  .nav-toggle:hover {
+    background: var(--navy-light);
+    opacity: 1;
+  }
+
+  #nav-version {
+    display: none;
+  }
+
+  .nav-links {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    padding: 0.25rem 0 0.5rem;
+    gap: 0;
+  }
+
+  .nav-links.open {
+    display: flex;
+  }
+
+  .nav-links li {
+    display: block;
+  }
+
+  .nav-links a {
+    display: block;
+    padding: 0.65rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+
+  main {
+    padding: 0.75rem;
+  }
+
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 1.05rem; }
+
+  /* Non-Gantt tables: allow horizontal scroll on mobile */
+  table:not(.gantt-table) {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Forms stack vertically */
+  .form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .form-row > * {
+    width: 100%;
+  }
+
+  .form-row input,
+  .form-row select,
+  .form-row textarea {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Larger touch targets */
+  button, .btn {
+    min-height: 40px;
+  }
+
+  /* Gantt legend wraps */
+  .gantt-legend {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  /* Cards full-width */
+  .card {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
