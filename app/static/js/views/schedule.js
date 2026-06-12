@@ -1,14 +1,18 @@
 // ── Schedule view: Timeline (Gantt) + Utilization heatmap ────────────────
 
 const SCHED_HOUR_WIDTH = 20; // pixels per hour in the Gantt timeline
-let   GANTT_LABEL_W    = 160; // resource-name column width; synced from CSS --gantt-label-w (responsive)
+let   GANTT_LABEL_W    = 160; // pinned label-column width (px); recomputed per render
 const UTIL_DAY_W       = 28;  // must match .gantt-day-th / .util-cell width in CSS
 
-// Read the current label-column width from CSS so px math matches the rendered
-// layout at every breakpoint (the var narrows on mobile). Call before building.
-function syncGanttLabelW() {
+function isMobileSchedule() {
+  return window.matchMedia('(max-width: 640px)').matches;
+}
+
+// Pinned label-column width from CSS (--gantt-label-w on :root). Used by the
+// utilization heatmap; the timeline forces 0 on mobile (label moves to its own row).
+function cssLabelW() {
   const v = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--gantt-label-w'), 10);
-  if (!isNaN(v)) GANTT_LABEL_W = v;
+  return isNaN(v) ? 160 : v;
 }
 
 // ── Availability helpers ──────────────────────────────────────────────────
@@ -443,7 +447,8 @@ function buildGanttResourceRowHourly(resource, tasks, fromDate, toDate, totalHou
   const grid      = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
   const availGrad = buildAvailabilityGradient(resource, dates, windows, blockouts);
   const background = availGrad ? `${grid}, ${availGrad}` : grid;
-  return `<tr>
+  const nameRow = `<tr class="gantt-name-row"><td class="gantt-name-td" colspan="${totalHours + 1}"><div class="gantt-name-inner">${escHtml(resource.name)}</div></td></tr>`;
+  return `${nameRow}<tr>
     <td class="gantt-label-td">${escHtml(resource.name)}</td>
     <td class="gantt-track-td" colspan="${totalHours}">
       <div class="gantt-track" style="width:${totalW}px;height:${trackHeight}px;background:${background}">${bars}</div>
@@ -457,7 +462,8 @@ function buildUnassignedRowHourly(tasks, fromDate, toDate, totalHours, priorityB
   const { html: bars, trackHeight } = buildGanttBarsHtml(unassigned, fromDate, toDate, priorityByProject, projectById);
   const totalW = totalHours * SCHED_HOUR_WIDTH;
   const grid = `repeating-linear-gradient(90deg,transparent,transparent ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH - 1}px,#dee2e6 ${SCHED_HOUR_WIDTH}px)`;
-  return `<tr>
+  const nameRow = `<tr class="gantt-name-row"><td class="gantt-name-td" colspan="${totalHours + 1}"><div class="gantt-name-inner gantt-unassigned">Unassigned</div></td></tr>`;
+  return `${nameRow}<tr>
     <td class="gantt-label-td gantt-unassigned">Unassigned</td>
     <td class="gantt-track-td" colspan="${totalHours}">
       <div class="gantt-track" style="width:${totalW}px;height:${trackHeight}px;background:${grid}">${bars}</div>
@@ -595,7 +601,8 @@ async function showSchedule(el) {
   }
 
   async function renderGantt(gen) {
-    syncGanttLabelW();
+    // Mobile: label column collapses to 0; names render on their own rows.
+    GANTT_LABEL_W = isMobileSchedule() ? 0 : cssLabelW();
     let resources, tasks, projects;
     try {
       [resources, tasks, projects] = await Promise.all([
@@ -663,7 +670,7 @@ async function showSchedule(el) {
         </span>
       </div>
       <div class="gantt-scroll-wrapper">
-        <table class="gantt-table" style="width:${GANTT_LABEL_W + totalHours * SCHED_HOUR_WIDTH}px">
+        <table class="gantt-table gantt-timeline" style="width:${GANTT_LABEL_W + totalHours * SCHED_HOUR_WIDTH}px">
           <thead>${thead}</thead>
           <tbody>${tbody}</tbody>
         </table>
@@ -675,7 +682,7 @@ async function showSchedule(el) {
     if (wrapper) {
       const syncLabels = () => {
         const x = wrapper.scrollLeft;
-        wrapper.querySelectorAll('.gantt-label-th, .gantt-label-td')
+        wrapper.querySelectorAll('.gantt-label-th, .gantt-label-td, .gantt-name-inner')
           .forEach(el => { el.style.transform = `translateX(${x}px)`; });
       };
       wrapper.addEventListener('scroll', syncLabels, { passive: true });
@@ -715,7 +722,7 @@ async function showSchedule(el) {
   }
 
   async function renderUtilization(gen) {
-    syncGanttLabelW();
+    GANTT_LABEL_W = cssLabelW();
     // Span from 7 days before today to 60 days ahead
     const from = schedAddDays(today, -7);
     const to   = schedAddDays(today,  60);
