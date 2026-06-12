@@ -86,6 +86,44 @@ class TaskResource(SQLModel, table=True):
     resource_id: int = Field(foreign_key="resource.id", primary_key=True)
 
 
+class CycleTemplate(SQLModel, table=True):
+    """A reusable bundle of tasks ("a cycle") instantiated onto a project.
+
+    E.g. a "Lit Review" cycle whose steps are Init → Gather → Collect → Draft →
+    Review. Steps, their durations, and resource assignments are configured once
+    in settings and are identical across every instantiation.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    steps: list["CycleStep"] = Relationship(
+        back_populates="template",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "order_by": "CycleStep.position"},
+    )
+
+
+class CycleStep(SQLModel, table=True):
+    """One ordered step within a CycleTemplate.
+
+    On instantiation each step becomes a Task titled "<title> <n>" (n = the cycle
+    number), chained via depends_on to the previous step's task.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    template_id: int = Field(foreign_key="cycletemplate.id", index=True)
+    position: int = Field(default=0)       # order within the template
+    title: str
+    duration: Optional[float] = Field(default=None)  # estimated hours
+
+    template: Optional[CycleTemplate] = Relationship(back_populates="steps")
+
+
+class CycleStepResource(SQLModel, table=True):
+    """Join table: a cycle step may be assigned to multiple resources."""
+    step_id: int = Field(foreign_key="cyclestep.id", primary_key=True)
+    resource_id: int = Field(foreign_key="resource.id", primary_key=True)
+
+
 class ResourceWindow(SQLModel, table=True):
     """Recurring weekly availability window for a resource. 0=Mon … 6=Sun.
 
