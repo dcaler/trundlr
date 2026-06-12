@@ -43,7 +43,9 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
     ).join('');
 
     const dep = t.depends_on_id ? taskById[t.depends_on_id] : null;
-    const depHtml = dep
+    const depHtml = t.dependency_broken
+      ? `<div style="font-size:0.78em;color:var(--danger);margin-top:1px" title="This task's dependency was deleted — set a new one.">⚠ dependency deleted — update it</div>`
+      : dep
       ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
       : '';
 

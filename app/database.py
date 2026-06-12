@@ -183,6 +183,12 @@ def apply_migrations(engine):
             """))
             conn.commit()
 
+        result = conn.execute(text("PRAGMA table_info(task)"))
+        task_cols3 = {row[1] for row in result}
+        if "dependency_broken" not in task_cols3:
+            conn.execute(text("ALTER TABLE task ADD COLUMN dependency_broken INTEGER NOT NULL DEFAULT 0"))
+            conn.commit()
+
         # cyclestep.command added after the cycles feature shipped without it.
         result = conn.execute(text("PRAGMA table_info(cyclestep)"))
         cyclestep_cols = {row[1] for row in result}

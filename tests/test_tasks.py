@@ -131,6 +131,25 @@ def test_delete_task(client, project_id):
     assert client.get(f"/api/tasks/{created['id']}").status_code == 404
 
 
+def test_delete_task_that_others_depend_on(client, project_id):
+    """Deleting a prerequisite must not 500 on the depends_on_id FK. Dependents
+    get their link cleared, are forced to blocked, and flagged dependency_broken
+    so the user is prompted to choose a new dependency."""
+    a = client.post("/api/tasks/", json={"title": "A", "project_id": project_id}).json()
+    b = client.post("/api/tasks/", json={"title": "B", "project_id": project_id, "depends_on_id": a["id"]}).json()
+
+    assert client.delete(f"/api/tasks/{a['id']}").status_code == 204
+    after = client.get(f"/api/tasks/{b['id']}").json()
+    assert after["depends_on_id"] is None
+    assert after["status"] == "blocked"
+    assert after["dependency_broken"] is True
+
+    # Setting a new dependency clears the flag.
+    c = client.post("/api/tasks/", json={"title": "C", "project_id": project_id}).json()
+    fixed = client.patch(f"/api/tasks/{b['id']}", json={"depends_on_id": c["id"]}).json()
+    assert fixed["dependency_broken"] is False
+
+
 def test_full_crud_round_trip(client, project_id, resource_id):
     created = client.post(
         "/api/tasks/",
