@@ -183,6 +183,13 @@ def apply_migrations(engine):
             """))
             conn.commit()
 
+        # cyclestep.command added after the cycles feature shipped without it.
+        result = conn.execute(text("PRAGMA table_info(cyclestep)"))
+        cyclestep_cols = {row[1] for row in result}
+        if cyclestep_cols and "command" not in cyclestep_cols:
+            conn.execute(text("ALTER TABLE cyclestep ADD COLUMN command TEXT"))
+            conn.commit()
+
         result = conn.execute(text("PRAGMA table_info(appsettings)"))
         appsettings_cols = {row[1] for row in result}
         if "caldav_default_project_id" not in appsettings_cols:

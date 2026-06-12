@@ -114,6 +114,7 @@ class CycleStep(SQLModel, table=True):
     position: int = Field(default=0)       # order within the template
     title: str
     duration: Optional[float] = Field(default=None)  # estimated hours
+    command: Optional[str] = Field(default=None)     # shell command (cpu/gpu/runner tasks)
 
     template: Optional[CycleTemplate] = Relationship(back_populates="steps")
 
