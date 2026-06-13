@@ -195,11 +195,22 @@ def _sync_token(keys: set) -> str:
     return f"{_SYNC_PREFIX}{payload}|{os.urandom(4).hex()}"
 
 
-def _parse_sync_token_keys(token: Optional[str]) -> set:
-    if not token or not token.startswith(_SYNC_PREFIX):
-        return set()
-    key_part = token[len(_SYNC_PREFIX):].split("|", 1)[0]
-    return {c for c in key_part.split(",") if c}
+def _valid_sync_token_error() -> Response:
+    """RFC 6578 DAV:valid-sync-token precondition failure (HTTP 403).
+
+    Tells the client its sync-token is no longer usable, so it must restart with
+    a token-less initial sync — our cue to do a full re-enumeration that flushes
+    any orphaned events the client is still holding.
+    """
+    root = ET.Element(_d("error"))
+    ET.SubElement(root, _d("valid-sync-token"))
+    xml = '<?xml version="1.0" encoding="UTF-8"?>' + ET.tostring(root, encoding="unicode")
+    return Response(
+        content=xml,
+        status_code=403,
+        media_type='application/xml; charset="utf-8"',
+        headers=_DAV_HEADERS,
+    )
 
 
 # ── iCal helpers ───────────────────────────────────────────────────────────
@@ -643,16 +654,24 @@ async def caldav_calendar_report(cal: str, request: Request, session: Session = 
         # multiget is href-driven, not delta-driven: no sync-token needed.
         return _multistatus(responses, gone=gone)
 
-    # sync-collection (and any other REPORT): return all current events, and
-    # 404 every event the client knew about last time that is now gone. The
-    # prior key set is decoded from the sync-token the client echoes back.
-    prior_keys = _parse_sync_token_keys(root.findtext(_d("sync-token")))
+    if root.tag == _d("sync-collection"):
+        # We keep no durable per-token state, so a token-diff can only report
+        # deletions the client's *current* token still knows about — it can't
+        # flush an orphan whose id has already aged out of the token. So when
+        # the client presents any token, reject it with DAV:valid-sync-token
+        # (HTTP 403); per RFC 6578 the client then restarts with a token-less
+        # initial sync, where the full member set below = the complete truth and
+        # anything the client has but we don't list is removed. That flushes the
+        # entire orphan backlog and every future deletion, reliably.
+        token = (root.findtext(_d("sync-token")) or "").strip()
+        if token:
+            return _valid_sync_token_error()
+
+    # Initial sync-collection (no token) and calendar-query: return the full
+    # current member set. This IS the reconciliation — no 404s needed.
     for member in members:
         responses.append(_member_response(member))
-    for removed_key in sorted(prior_keys - current_keys):
-        gone.append(_member_href(cal, removed_key, is_block))
-
-    return _multistatus(responses, gone=gone, sync_token=_sync_token(current_keys))
+    return _multistatus(responses, sync_token=_sync_token(current_keys))
 
 
 # ── GET /caldav/calendars/{cal}/{uid_file} ─────────────────────────────────

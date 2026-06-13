@@ -174,28 +174,43 @@ def test_unscheduled_task_excluded_from_propfind(client):
     assert len(member_hrefs) == 1
 
 
-# ── Bug 2: deletion / unscheduling reported, not orphaned ─────────────────────
+# ── Bug 2: deletions don't orphan — token forces a full re-sync ───────────────
 
-def test_deleted_task_reported_gone_in_sync(client):
+def test_presenting_a_token_forces_full_resync(client):
+    """A sync-collection with any prior token gets DAV:valid-sync-token (403),
+    forcing the client to re-enumerate from scratch — which flushes orphans."""
     project = client.post("/api/projects/", json={"name": "P"}).json()
-    resource = client.post("/api/resources/", json=HUMAN).json()
-    rid = resource["id"]
+    rid = client.post("/api/resources/", json=HUMAN).json()["id"]
     task = _make_scheduled_task(client, project["id"], rid)
 
-    # Initial sync establishes the baseline token (and returns the event).
+    # Initial (token-less) sync returns the event and a fresh token.
     root = _report(client, rid, _sync_collection_body())
     token = root.findtext(_d("sync-token"))
     assert token
-    assert any(status is None for _, status, _ in _responses(root))
+    hrefs = [h for h, _, _ in _responses(root) if h and h.endswith(".ics")]
+    assert hrefs == [f"/caldav/calendars/{rid}/task-{task['id']}@trundlr.ics"]
 
-    # Delete the task, then sync again echoing the prior token.
+    # Presenting that token is rejected → client must restart with empty token.
+    rejected = client.request(
+        "REPORT", f"/caldav/calendars/{rid}/",
+        content=_sync_collection_body(token),
+        headers={"Depth": "1", "Content-Type": "application/xml"},
+    )
+    assert rejected.status_code == 403
+    assert "valid-sync-token" in rejected.text
+
+
+def test_deleted_task_absent_from_full_resync(client):
+    project = client.post("/api/projects/", json={"name": "P"}).json()
+    rid = client.post("/api/resources/", json=HUMAN).json()["id"]
+    task = _make_scheduled_task(client, project["id"], rid)
+
     assert client.delete(f"/api/tasks/{task['id']}").status_code in (200, 204)
-    root2 = _report(client, rid, _sync_collection_body(token))
-    gone = [
-        href for href, status, _ in _responses(root2)
-        if status and "404" in status
-    ]
-    assert gone == [f"/caldav/calendars/{rid}/task-{task['id']}@trundlr.ics"]
+
+    # Token-less (initial) sync = the full truth; the deleted task is simply gone.
+    root = _report(client, rid, _sync_collection_body())
+    hrefs = [h for h, _, _ in _responses(root) if h and h.endswith(".ics")]
+    assert hrefs == []
 
 
 def test_multiget_404s_missing_event(client):
