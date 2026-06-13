@@ -153,11 +153,13 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
       if (sel.value === 'in_progress') {
         patch.start_date = nowIsoStr();
       } else if (sel.value === 'done') {
-        const now = new Date();
         patch.end_date = nowIsoStr();
         const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
         if (task?.start_date) {
-          const durH = (now.getTime() - new Date(task.start_date.replace(' ', 'T') + 'Z').getTime()) / 3600000;
+          // Both are naive wall-clock strings in the same (configured) zone;
+          // parse both as UTC so the tz offset cancels and we get real elapsed hours.
+          const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
+          const durH = (Date.parse(patch.end_date + 'Z') - startMs) / 3600000;
           if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
         }
       }
