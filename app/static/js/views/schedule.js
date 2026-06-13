@@ -101,11 +101,17 @@ async function realignSchedule(resources, tasks, projects) {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
   };
 
-  // Fetch blockouts
+  // Fetch blockouts + CalDAV blocks (both reduce availability; merged so the
+  // scheduler routes around them just like manual blockouts).
   let blockoutsByResource = {};
   try {
-    const bList = await Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`)));
-    blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
+    const [bList, cbList] = await Promise.all([
+      Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`))),
+      Promise.all(resources.map(r => api.get(`/resources/${r.id}/calblocks`))),
+    ]);
+    blockoutsByResource = Object.fromEntries(
+      resources.map((r, i) => [r.id, [...bList[i], ...cbList[i]]])
+    );
   } catch (_) {}
 
   // Advance cursor so a task of `dur` ms starting at `ms` doesn't overlap any pinned slot.
@@ -652,15 +658,17 @@ async function showSchedule(el) {
     const from = schedAddDays(earliest < today ? earliest : today, -7);
     const to   = schedAddDays(latest   > today ? latest   : today,  14);
 
-    // Fetch availability data for shading; fall back to empty if requests fail
+    // Fetch availability data for shading; fall back to empty if requests fail.
+    // CalDAV blocks are merged into blockouts so they shade red identically.
     let windowsByResource = {}, blockoutsByResource = {};
     try {
-      const [wList, bList] = await Promise.all([
+      const [wList, bList, cbList] = await Promise.all([
         Promise.all(resources.map(r => api.get(`/resources/${r.id}/windows`))),
         Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`))),
+        Promise.all(resources.map(r => api.get(`/resources/${r.id}/calblocks`))),
       ]);
       windowsByResource  = Object.fromEntries(resources.map((r, i) => [r.id, wList[i]]));
-      blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
+      blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, [...bList[i], ...cbList[i]]]));
     } catch (_) {}
     if (renderGen !== gen) return;
 

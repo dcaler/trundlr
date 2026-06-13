@@ -15,7 +15,9 @@ from typing import Iterable, Iterator, Optional
 
 from sqlmodel import Session, select
 
-from app.models import Resource, ResourceBlockout, ResourceWindow, Task, TaskResource
+from app.models import (
+    Resource, ResourceBlockout, ResourceCalBlock, ResourceWindow, Task, TaskResource,
+)
 
 _EPS = 1e-6  # tolerance for float hour comparisons
 
@@ -183,6 +185,51 @@ def _blockouts_for_resource(session: Session, resource_id: int) -> "list[Resourc
     ).all())
 
 
+def calblock_segments(block: ResourceCalBlock) -> "list[ResourceBlockout]":
+    """Convert a CalDAV block (start/end datetimes) into per-day blockout-shaped
+    segments the capacity engine and JS shading already understand.
+
+    One transient (un-persisted) ResourceBlockout per calendar day covered:
+    a day fully inside the block becomes a full-day blockout (from/to = None);
+    a partially-covered day carries clamped "HH:MM" bounds ("24:00" = midnight).
+    """
+    segments: list[ResourceBlockout] = []
+    day = block.start.date()
+    last = block.end.date()
+    while day <= last:
+        day_start = datetime.combine(day, time.min)
+        day_end = day_start + timedelta(days=1)
+        seg_start = max(block.start, day_start)
+        seg_end = min(block.end, day_end)
+        if seg_end > seg_start:
+            full = seg_start == day_start and seg_end == day_end
+            segments.append(ResourceBlockout(
+                resource_id=block.resource_id,
+                start_date=day,
+                end_date=day,
+                from_time=None if full else f"{seg_start.hour:02d}:{seg_start.minute:02d}",
+                to_time=None if full else (
+                    "24:00" if seg_end == day_end else f"{seg_end.hour:02d}:{seg_end.minute:02d}"
+                ),
+            ))
+        day += timedelta(days=1)
+    return segments
+
+
+def _calblocks_for_resource(session: Session, resource_id: int) -> "list[ResourceCalBlock]":
+    return list(session.exec(
+        select(ResourceCalBlock).where(ResourceCalBlock.resource_id == resource_id)
+    ).all())
+
+
+def _obstacles_for_resource(session: Session, resource_id: int) -> "list[ResourceBlockout]":
+    """Manual blockouts plus CalDAV blocks, all in blockout shape."""
+    blockouts = _blockouts_for_resource(session, resource_id)
+    for block in _calblocks_for_resource(session, resource_id):
+        blockouts.extend(calblock_segments(block))
+    return blockouts
+
+
 def resource_schedule(
     session: Session, resource_id: int, start: date, end: date
 ) -> Optional[list[DayUtilization]]:
@@ -190,7 +237,7 @@ def resource_schedule(
     if resource is None:
         return None
     windows = _windows_for_resource(session, resource_id)
-    blockouts = _blockouts_for_resource(session, resource_id)
+    blockouts = _obstacles_for_resource(session, resource_id)
     return compute_utilization(
         resource,
         _tasks_for_resource(session, resource_id),
@@ -244,7 +291,7 @@ def resource_conflicts(
     if resource is None:
         return None
     windows = _windows_for_resource(session, resource_id)
-    blockouts = _blockouts_for_resource(session, resource_id)
+    blockouts = _obstacles_for_resource(session, resource_id)
     return detect_conflicts(
         resource,
         _tasks_for_resource(session, resource_id),

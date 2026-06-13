@@ -142,6 +142,20 @@ class ResourceWindow(SQLModel, table=True):
     to_time: str       # "HH:MM"
 
 
+class ResourceCalBlock(SQLModel, table=True):
+    """A block painted via the resource's CalDAV "{name}-block" calendar.
+
+    Functions like a ResourceBlockout (subtracts availability) but is kept in a
+    separate table so it never appears in the manual Blockouts UI. start/end are
+    naive datetimes in the configured app timezone, matching Task.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    resource_id: int = Field(foreign_key="resource.id", index=True)
+    start: datetime
+    end: datetime
+    summary: Optional[str] = Field(default=None)  # painted event title
+
+
 class ResourceBlockout(SQLModel, table=True):
     """A date-range exception that blocks a resource regardless of windows.
 

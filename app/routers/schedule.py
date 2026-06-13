@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import Resource, ResourceBlockout, ResourceWindow, Task, TaskResource
-from app.scheduling import compute_utilization, resource_conflicts, resource_schedule
+from app.models import Resource, ResourceBlockout, ResourceCalBlock, ResourceWindow, Task, TaskResource
+from app.scheduling import calblock_segments, compute_utilization, resource_conflicts, resource_schedule
 from app.schemas import ConflictRead, DayUtilizationRead, ResourceScheduleRead
 from app.validation import MAX_RANGE_DAYS, DBId
 
@@ -77,6 +77,9 @@ def get_utilization(
     blockouts_by_resource: dict[int, list[ResourceBlockout]] = {}
     for b in session.exec(select(ResourceBlockout)).all():
         blockouts_by_resource.setdefault(b.resource_id, []).append(b)
+    # CalDAV blocks reduce capacity too — expand each into per-day blockout segments.
+    for blk in session.exec(select(ResourceCalBlock)).all():
+        blockouts_by_resource.setdefault(blk.resource_id, []).extend(calblock_segments(blk))
 
     return [
         ResourceScheduleRead(

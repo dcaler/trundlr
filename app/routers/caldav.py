@@ -12,7 +12,7 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, Task, TaskResource
+from app.models import AppSettings, Project, Resource, ResourceCalBlock, Task, TaskResource
 
 # ── Namespaces ─────────────────────────────────────────────────────────────
 
@@ -162,6 +162,11 @@ def _task_etag(task: Task, project_name: Optional[str] = None) -> str:
     return f'"{hashlib.md5(raw.encode()).hexdigest()}"'
 
 
+def _block_etag(block: ResourceCalBlock) -> str:
+    raw = f"block:{block.id}:{block.summary}:{block.start}:{block.end}"
+    return f'"{hashlib.md5(raw.encode()).hexdigest()}"'
+
+
 def _collection_ctag(tasks: list) -> str:
     # Return a unique value on every call so Apple Calendar always detects
     # a "changed" ctag between its two PROPFIND rounds and sends REPORT.
@@ -232,6 +237,29 @@ def _task_to_ical(task: Task, resource: Resource, project_name: Optional[str], t
     return cal.to_ical().decode("utf-8")
 
 
+def _block_to_ical(block: ResourceCalBlock, tz: ZoneInfo) -> str:
+    cal = Calendar()
+    cal.add("prodid", "-//Trundlr//CalDAV//EN")
+    cal.add("version", "2.0")
+
+    ev = Event()
+    ev.add("uid", f"block-{block.id}@trundlr")
+    ev.add("summary", block.summary or "Blocked")
+
+    def _to_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=tz).astimezone(timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    start_utc = _to_utc(block.start)
+    ev.add("dtstart", start_utc)
+    ev.add("dtend", _to_utc(block.end) if block.end else start_utc + timedelta(hours=1))
+    ev.add("status", "CONFIRMED")
+    ev.add("dtstamp", datetime.now(timezone.utc))
+    cal.add_component(ev)
+    return cal.to_ical().decode("utf-8")
+
+
 def _parse_vevent(raw: bytes) -> Optional[dict]:
     try:
         cal = Calendar.from_ical(raw)
@@ -276,6 +304,29 @@ def _parse_task_id(uid: str) -> Optional[int]:
     return None
 
 
+def _parse_block_id(uid: str) -> Optional[int]:
+    if uid.startswith("block-") and uid.endswith("@trundlr"):
+        try:
+            return int(uid[6:-8])
+        except ValueError:
+            return None
+    return None
+
+
+def _resolve_cal(cal: str) -> Optional[tuple]:
+    """Map a calendar path segment to (resource_id, is_block).
+
+    "5" → (5, False) the task calendar; "block-5" → (5, True) the block calendar.
+    Returns None if the id isn't an integer.
+    """
+    is_block = cal.startswith("block-")
+    raw = cal[len("block-"):] if is_block else cal
+    try:
+        return int(raw), is_block
+    except ValueError:
+        return None
+
+
 # ── DB helpers ─────────────────────────────────────────────────────────────
 
 def _get_tz(session: Session) -> ZoneInfo:
@@ -295,6 +346,12 @@ def _tasks_for_resource(session: Session, rid: int) -> list:
 def _project_name_for_task(session: Session, task: Task) -> Optional[str]:
     project = session.get(Project, task.project_id)
     return project.name if project else None
+
+
+def _blocks_for_resource(session: Session, rid: int) -> list:
+    return list(session.exec(
+        select(ResourceCalBlock).where(ResourceCalBlock.resource_id == rid)
+    ).all())
 
 
 # ── Prop builders ──────────────────────────────────────────────────────────
@@ -332,11 +389,11 @@ def _filter_props(all_props: dict, requested: Optional[list]) -> tuple:
     return found, missing
 
 
-def _calendar_collection_props(resource: Resource, ctag: str, sync_token: str,
+def _calendar_collection_props(display_name: str, ctag: str, sync_token: str,
                                requested: Optional[list]) -> tuple:
     all_props = {
         _d("resourcetype"): _resourcetype_collection_calendar(),
-        _d("displayname"): _val(resource.name),
+        _d("displayname"): _val(display_name),
         _cs("getctag"): _val(ctag),
         _d("sync-token"): _val(sync_token),
         _cal("supported-calendar-component-set"): _supported_calendar_component_set(),
@@ -406,22 +463,33 @@ async def caldav_calendars_home(request: Request, session: Session = Depends(get
     if depth == "1":
         resources = session.exec(select(Resource)).all()
         for resource in resources:
+            # Task calendar.
             tasks = _scheduled(_tasks_for_resource(session, resource.id))
-            ctag = _collection_ctag(tasks)
-            sync_token = _sync_token({t.id for t in tasks})
-            found, missing = _calendar_collection_props(resource, ctag, sync_token, requested)
-            responses.append((f"/caldav/calendars/{resource.id}/", found, missing))
+            t_found, t_missing = _calendar_collection_props(
+                resource.name, _collection_ctag(tasks),
+                _sync_token({t.id for t in tasks}), requested,
+            )
+            responses.append((f"/caldav/calendars/{resource.id}/", t_found, t_missing))
+
+            # Block calendar — paint events here to block scheduling.
+            blocks = _blocks_for_resource(session, resource.id)
+            b_found, b_missing = _calendar_collection_props(
+                f"{resource.name}-block", _collection_ctag(blocks),
+                _sync_token({b.id for b in blocks}), requested,
+            )
+            responses.append((f"/caldav/calendars/block-{resource.id}/", b_found, b_missing))
 
     return _multistatus(responses)
 
 
-# ── PROPPATCH /caldav/calendars/{rid}/ ─────────────────────────────────────
+# ── PROPPATCH /caldav/calendars/{cal}/ ─────────────────────────────────────
 # Apple Calendar uses PROPPATCH to set calendar colour, display name, etc.
 # We don't persist these, but must return 207 or clients error out.
 
-@router.api_route("/calendars/{rid}/", methods=["PROPPATCH"])
-async def caldav_calendar_proppatch(rid: int, request: Request, session: Session = Depends(get_db)):
-    if not session.get(Resource, rid):
+@router.api_route("/calendars/{cal}/", methods=["PROPPATCH"])
+async def caldav_calendar_proppatch(cal: str, request: Request, session: Session = Depends(get_db)):
+    resolved = _resolve_cal(cal)
+    if resolved is None or not session.get(Resource, resolved[0]):
         return Response(status_code=404)
     body = await request.body()
     props = []
@@ -433,22 +501,26 @@ async def caldav_calendar_proppatch(rid: int, request: Request, session: Session
                 props.extend(child.tag for child in prop_el)
     except ET.ParseError:
         pass
-    return _multistatus([(f"/caldav/calendars/{rid}/", {tag: None for tag in props}, [])])
+    return _multistatus([(f"/caldav/calendars/{cal}/", {tag: None for tag in props}, [])])
 
 
-# ── PROPFIND /caldav/calendars/{rid}/ ──────────────────────────────────────
+# ── PROPFIND /caldav/calendars/{cal}/ ──────────────────────────────────────
 
-def _event_member_props(task: Task, project_name: Optional[str], requested: Optional[list]) -> tuple:
+def _member_props(etag: str, requested: Optional[list]) -> tuple:
     all_props = {
         _d("resourcetype"): None,  # self-closing: a plain resource, not a collection
-        _d("getetag"): _val(_task_etag(task, project_name)),
+        _d("getetag"): _val(etag),
         _d("getcontenttype"): _val("text/calendar; component=vevent"),
     }
     return _filter_props(all_props, requested)
 
 
-@router.api_route("/calendars/{rid}/", methods=["PROPFIND"])
-async def caldav_calendar_propfind(rid: int, request: Request, session: Session = Depends(get_db)):
+@router.api_route("/calendars/{cal}/", methods=["PROPFIND"])
+async def caldav_calendar_propfind(cal: str, request: Request, session: Session = Depends(get_db)):
+    resolved = _resolve_cal(cal)
+    if resolved is None:
+        return Response(status_code=404)
+    rid, is_block = resolved
     resource = session.get(Resource, rid)
     if not resource:
         return Response(status_code=404)
@@ -456,28 +528,42 @@ async def caldav_calendar_propfind(rid: int, request: Request, session: Session 
     requested = _requested_props(body)
     depth = request.headers.get("Depth", "0")
 
-    tasks = _scheduled(_tasks_for_resource(session, rid))
-    ctag = _collection_ctag(tasks)
-    sync_token = _sync_token({t.id for t in tasks})
-    found, missing = _calendar_collection_props(resource, ctag, sync_token, requested)
-    responses = [(f"/caldav/calendars/{rid}/", found, missing)]
+    if is_block:
+        members = _blocks_for_resource(session, rid)
+        display = f"{resource.name}-block"
+    else:
+        members = _scheduled(_tasks_for_resource(session, rid))
+        display = resource.name
+
+    ctag = _collection_ctag(members)
+    sync_token = _sync_token({m.id for m in members})
+    found, missing = _calendar_collection_props(display, ctag, sync_token, requested)
+    responses = [(f"/caldav/calendars/{cal}/", found, missing)]
 
     # Depth:1 enumerates the calendar's event members — the classic WebDAV
     # listing path Apple Calendar uses to discover events.
     if depth == "1":
-        for task in tasks:
-            project_name = _project_name_for_task(session, task)
-            m_found, m_missing = _event_member_props(task, project_name, requested)
-            href = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
+        for m in members:
+            if is_block:
+                etag = _block_etag(m)
+                href = f"/caldav/calendars/{cal}/block-{m.id}@trundlr.ics"
+            else:
+                etag = _task_etag(m, _project_name_for_task(session, m))
+                href = f"/caldav/calendars/{cal}/task-{m.id}@trundlr.ics"
+            m_found, m_missing = _member_props(etag, requested)
             responses.append((href, m_found, m_missing))
 
     return _multistatus(responses)
 
 
-# ── REPORT /caldav/calendars/{rid}/ ────────────────────────────────────────
+# ── REPORT /caldav/calendars/{cal}/ ────────────────────────────────────────
 
-@router.api_route("/calendars/{rid}/", methods=["REPORT"])
-async def caldav_calendar_report(rid: int, request: Request, session: Session = Depends(get_db)):
+@router.api_route("/calendars/{cal}/", methods=["REPORT"])
+async def caldav_calendar_report(cal: str, request: Request, session: Session = Depends(get_db)):
+    resolved = _resolve_cal(cal)
+    if resolved is None:
+        return Response(status_code=404)
+    rid, is_block = resolved
     resource = session.get(Resource, rid)
     if not resource:
         return Response(status_code=404)
@@ -490,27 +576,37 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
     except ET.ParseError:
         return Response(status_code=400, content="Bad XML")
 
-    # Only scheduled tasks are real events (see _scheduled). Unscheduled tasks
-    # must not appear, and a task that *becomes* unscheduled must be reported
-    # as removed, just like a deletion.
-    tasks = _scheduled(_tasks_for_resource(session, rid))
-    current_ids = {t.id for t in tasks}
+    # Members are blocks (block calendar) or scheduled tasks (task calendar).
+    # An unscheduled/deleted member that the client still knows about must be
+    # reported as removed (404) so it isn't orphaned.
+    if is_block:
+        members = _blocks_for_resource(session, rid)
+        prefix = "block"
+    else:
+        members = _scheduled(_tasks_for_resource(session, rid))
+        prefix = "task"
+    by_id = {m.id: m for m in members}
+    current_ids = set(by_id)
 
-    def _event_response(task: Task):
-        project_name = _project_name_for_task(session, task)
-        ical_str = _task_to_ical(task, resource, project_name, tz)
+    def _href_for(member_id: int) -> str:
+        return f"/caldav/calendars/{cal}/{prefix}-{member_id}@trundlr.ics"
+
+    def _member_response(member):
+        if is_block:
+            ical_str = _block_to_ical(member, tz)
+            etag = _block_etag(member)
+        else:
+            project_name = _project_name_for_task(session, member)
+            ical_str = _task_to_ical(member, resource, project_name, tz)
+            etag = _task_etag(member, project_name)
         etag_el = ET.Element("_val")
-        etag_el.text = _task_etag(task, project_name)
+        etag_el.text = etag
         caldata_el = ET.Element("_val")
         caldata_el.text = ical_str
-        href = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
-        return (href, {
+        return (_href_for(member.id), {
             _d("getetag"): etag_el,
             _cal("calendar-data"): caldata_el,
         }, [])
-
-    def _href_for(task_id: int) -> str:
-        return f"/caldav/calendars/{rid}/task-{task_id}@trundlr.ics"
 
     responses = []
     gone = []
@@ -525,10 +621,9 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
             # before parsing or the "@trundlr" suffix check never matches.
             filename = unquote(el.text).rstrip("/").rsplit("/", 1)[-1]
             uid = filename[:-4] if filename.endswith(".ics") else filename
-            task_id = _parse_task_id(uid)
-            if task_id is not None and task_id in current_ids:
-                task = next(t for t in tasks if t.id == task_id)
-                responses.append(_event_response(task))
+            member_id = _parse_block_id(uid) if is_block else _parse_task_id(uid)
+            if member_id is not None and member_id in current_ids:
+                responses.append(_member_response(by_id[member_id]))
             else:
                 gone.append(el.text)
         # multiget is href-driven, not delta-driven: no sync-token needed.
@@ -538,33 +633,48 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
     # 404 every event the client knew about last time that is now gone. The
     # prior id set is decoded from the sync-token the client echoes back.
     prior_ids = _parse_sync_token_ids(root.findtext(_d("sync-token")))
-    for task in tasks:
-        responses.append(_event_response(task))
+    for member in members:
+        responses.append(_member_response(member))
     for removed_id in sorted(prior_ids - current_ids):
         gone.append(_href_for(removed_id))
 
     return _multistatus(responses, gone=gone, sync_token=_sync_token(current_ids))
 
 
-# ── GET /caldav/calendars/{rid}/{uid_file} ─────────────────────────────────
+# ── GET /caldav/calendars/{cal}/{uid_file} ─────────────────────────────────
 
-@router.get("/calendars/{rid}/{uid_file}")
-def caldav_get_event(rid: int, uid_file: str, session: Session = Depends(get_db)):
+@router.get("/calendars/{cal}/{uid_file}")
+def caldav_get_event(cal: str, uid_file: str, session: Session = Depends(get_db)):
+    resolved = _resolve_cal(cal)
+    if resolved is None:
+        return Response(status_code=404)
+    rid, is_block = resolved
     resource = session.get(Resource, rid)
     if not resource:
         return Response(status_code=404)
 
     uid = uid_file[:-4] if uid_file.endswith(".ics") else uid_file
+    tz = _get_tz(session)
+
+    if is_block:
+        block_id = _parse_block_id(uid)
+        block = session.get(ResourceCalBlock, block_id) if block_id is not None else None
+        if not block or block.resource_id != rid:
+            return Response(status_code=404)
+        return Response(
+            content=_block_to_ical(block, tz),
+            media_type="text/calendar; charset=utf-8",
+            headers={"ETag": _block_etag(block), **_DAV_HEADERS},
+        )
+
     task_id = _parse_task_id(uid)
     if task_id is None:
         return Response(status_code=404)
-
     task = session.get(Task, task_id)
     if not task or task.start_date is None:
         # Unscheduled tasks are not calendar events (see _scheduled).
         return Response(status_code=404)
 
-    tz = _get_tz(session)
     project_name = _project_name_for_task(session, task)
     ical_str = _task_to_ical(task, resource, project_name, tz)
     etag = _task_etag(task, project_name)
@@ -576,10 +686,41 @@ def caldav_get_event(rid: int, uid_file: str, session: Session = Depends(get_db)
     )
 
 
-# ── PUT /caldav/calendars/{rid}/{uid_file} ─────────────────────────────────
+# ── PUT /caldav/calendars/{cal}/{uid_file} ─────────────────────────────────
 
-@router.put("/calendars/{rid}/{uid_file}")
-async def caldav_put_event(rid: int, uid_file: str, request: Request, session: Session = Depends(get_db)):
+def _put_block(session: Session, rid: int, cal: str, uid: str, parsed: dict, tz: ZoneInfo) -> Response:
+    """Create or update a ResourceCalBlock from a PUT to the block calendar."""
+    start = _to_naive_dt(parsed["dtstart"], tz)
+    if start is None:
+        return Response(status_code=400, content="Block event needs a start time")
+    end = _to_naive_dt(parsed["dtend"], tz) or (start + timedelta(hours=1))
+    summary = parsed["summary"] or None
+
+    block_id = _parse_block_id(uid)
+    block = session.get(ResourceCalBlock, block_id) if block_id is not None else None
+    if block and block.resource_id == rid:
+        block.start = start
+        block.end = end
+        block.summary = summary
+        session.add(block)
+        session.commit()
+        session.refresh(block)
+        return Response(status_code=204, headers={"ETag": _block_etag(block), **_DAV_HEADERS})
+
+    block = ResourceCalBlock(resource_id=rid, start=start, end=end, summary=summary)
+    session.add(block)
+    session.commit()
+    session.refresh(block)
+    location = f"/caldav/calendars/{cal}/block-{block.id}@trundlr.ics"
+    return Response(status_code=201, headers={"Location": location, "ETag": _block_etag(block), **_DAV_HEADERS})
+
+
+@router.put("/calendars/{cal}/{uid_file}")
+async def caldav_put_event(cal: str, uid_file: str, request: Request, session: Session = Depends(get_db)):
+    resolved = _resolve_cal(cal)
+    if resolved is None:
+        return Response(status_code=404)
+    rid, is_block = resolved
     resource = session.get(Resource, rid)
     if not resource:
         return Response(status_code=404)
@@ -593,6 +734,10 @@ async def caldav_put_event(rid: int, uid_file: str, request: Request, session: S
 
     tz = _get_tz(session)
     uid = parsed["uid"]
+
+    if is_block:
+        return _put_block(session, rid, cal, uid, parsed, tz)
+
     task_id = _parse_task_id(uid)
 
     if task_id is not None:
@@ -646,15 +791,29 @@ async def caldav_put_event(rid: int, uid_file: str, request: Request, session: S
     return Response(status_code=201, headers={"Location": location, "ETag": etag, **_DAV_HEADERS})
 
 
-# ── DELETE /caldav/calendars/{rid}/{uid_file} ──────────────────────────────
+# ── DELETE /caldav/calendars/{cal}/{uid_file} ──────────────────────────────
 
-@router.delete("/calendars/{rid}/{uid_file}")
-def caldav_delete_event(rid: int, uid_file: str, session: Session = Depends(get_db)):
+@router.delete("/calendars/{cal}/{uid_file}")
+def caldav_delete_event(cal: str, uid_file: str, session: Session = Depends(get_db)):
+    resolved = _resolve_cal(cal)
+    if resolved is None:
+        return Response(status_code=404)
+    rid, is_block = resolved
     resource = session.get(Resource, rid)
     if not resource:
         return Response(status_code=404)
 
     uid = uid_file[:-4] if uid_file.endswith(".ics") else uid_file
+
+    if is_block:
+        block_id = _parse_block_id(uid)
+        block = session.get(ResourceCalBlock, block_id) if block_id is not None else None
+        if not block or block.resource_id != rid:
+            return Response(status_code=404)
+        session.delete(block)
+        session.commit()
+        return Response(status_code=204, headers=_DAV_HEADERS)
+
     task_id = _parse_task_id(uid)
     if task_id is None:
         return Response(status_code=404)
