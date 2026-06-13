@@ -420,11 +420,11 @@ input[readonly] {
 .bar-blocked    { background: #f8d7da; color: #842029; border-left: 3px solid #dc3545; }
 .bar-done       { background: #d1e7dd; color: #0a3622; }
 
-/* Priority top-stripe on Gantt bars */
-.bar-p1 { border-top: 2px solid #dc3545; }
-.bar-p2 { border-top: 2px solid #fd7e14; }
-.bar-p3 { border-top: 2px solid #6c757d; }
-.bar-p4 { border-top: 2px solid #adb5bd; }
+/* Priority top-stripe on Gantt bars — matches the priority-pN badge palette */
+.bar-p1 { border-top: 3px solid #dc3545; }  /* On Fire   — red    */
+.bar-p2 { border-top: 3px solid #fd7e14; }  /* Front Burner — orange */
+.bar-p3 { border-top: 3px solid #ffc107; }  /* Back Burner  — amber  */
+.bar-p4 { border-top: 3px solid #adb5bd; }  /* Crock Pot — grey   */
 
 /* ── Tab bar ─────────────────────────────────────────────────────────────── */
 
