@@ -15,55 +15,7 @@ function cssLabelW() {
   return isNaN(v) ? 160 : v;
 }
 
-// ── Availability helpers ──────────────────────────────────────────────────
-
-// Advance cursorMs to the next moment inside resource.available_from/to/days,
-// skipping any blockout periods.  If cursor is already in a valid slot, returns it.
-function nextSlotInWindow(cursorMs, resource, blockouts = []) {
-  const timeToMs = t => { const [h, m] = t.split(':').map(Number); return (h * 60 + m) * 60000; };
-  const fmtDate  = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-
-  const fromMs = timeToMs(resource.available_from || '00:00');
-  const toMs   = timeToMs(resource.available_to   || '23:59');
-
-  let probe = cursorMs;
-  for (let i = 0; i < 730; i++) {
-    const d        = new Date(probe);
-    const dateStr  = fmtDate(d);
-    const dow      = (d.getDay() + 6) % 7; // 0=Mon … 6=Sun
-    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const nextDay  = dayStart + 86400000 + fromMs;
-
-    // Full-day blockout — skip entire day
-    if (blockouts.some(b => b.from_time === null && dateStr >= b.start_date && dateStr <= b.end_date)) {
-      probe = nextDay; continue;
-    }
-
-    // Not an available workday — skip to next day
-    if (!(resource.available_days & (1 << dow))) { probe = nextDay; continue; }
-
-    const winStart = dayStart + fromMs;
-    const winEnd   = dayStart + toMs;
-
-    if (probe < winStart) { probe = winStart; continue; } // before window — jump to start
-    if (probe >= winEnd)  { probe = nextDay;  continue; } // past window  — next day
-
-    // Inside window — skip over any partial blockout that covers probe
-    const partial = blockouts.find(b => {
-      if (b.from_time === null) return false;
-      if (dateStr < b.start_date || dateStr > b.end_date) return false;
-      const bs = dayStart + timeToMs(b.from_time);
-      const be = dayStart + timeToMs(b.to_time);
-      return probe >= bs && probe < be;
-    });
-    if (partial) { probe = dayStart + timeToMs(partial.to_time); continue; }
-
-    return probe;
-  }
-  return probe;
-}
-
-// ── Re-align: sort tasks by project priority per resource, sequential start times ─
+// ── Re-align: global priority list-scheduler (availability-window aware) ──────
 
 async function realignSchedule(resources, tasks, projects) {
   const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
@@ -89,22 +41,16 @@ async function realignSchedule(resources, tasks, projects) {
     return t.end_date ? new Date(t.end_date).getTime() : 0;
   };
 
-  // Window boundary helpers (simple available_from/to model)
-  const winStart = (ms, r) => {
-    const [h, m] = (r.available_from || '00:00').split(':').map(Number);
-    const d = new Date(ms);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
-  };
-  const winEnd = (ms, r) => {
-    const [h, m] = (r.available_to || '23:59').split(':').map(Number);
-    const d = new Date(ms);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
-  };
-
-  // Fetch blockouts
-  let blockoutsByResource = {};
+  // Fetch availability (weekly windows + blockouts) so scheduling honors the SAME
+  // availability the timeline shades. Per the model, when a resource has weekly
+  // windows they replace the simple available_from/to/days for scheduling.
+  let windowsByResource = {}, blockoutsByResource = {};
   try {
-    const bList = await Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`)));
+    const [wList, bList] = await Promise.all([
+      Promise.all(resources.map(r => api.get(`/resources/${r.id}/windows`))),
+      Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`))),
+    ]);
+    windowsByResource   = Object.fromEntries(resources.map((r, i) => [r.id, wList[i]]));
     blockoutsByResource = Object.fromEntries(resources.map((r, i) => [r.id, bList[i]]));
   } catch (_) {}
 
@@ -120,6 +66,65 @@ async function realignSchedule(resources, tasks, projects) {
       }
     }
     return c;
+  };
+
+  // ── Availability (windows-aware, mirrors buildAvailabilityGradient) ─────────
+  const toMs0    = t => { const [h, m] = t.split(':').map(Number); return (h * 60 + m) * 60000; };
+  const dayStart = ms => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  const dateOf   = ms => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+
+  // Availability intervals (absolute ms) for a resource on the day starting at
+  // `ds`. Uses weekly windows when the resource has any (so scheduling matches
+  // the shading), else the simple available_from/to/days. Subtracts blockouts.
+  const dayIntervals = (resource, ds) => {
+    const windows   = windowsByResource[resource.id]   || [];
+    const blockouts = blockoutsByResource[resource.id] || [];
+    const dateStr = dateOf(ds);
+    const dow = (new Date(ds).getDay() + 6) % 7; // 0=Mon … 6=Sun
+    if (blockouts.some(b => b.from_time === null && dateStr >= b.start_date && dateStr <= b.end_date)) return [];
+    let ivs;
+    if (windows.length) {
+      ivs = windows.filter(w => w.day_of_week === dow).map(w => [toMs0(w.from_time), toMs0(w.to_time)]);
+    } else if (resource.available_days & (1 << dow)) {
+      ivs = [[toMs0(resource.available_from || '00:00'), toMs0(resource.available_to || '23:59')]];
+    } else {
+      ivs = [];
+    }
+    // Subtract partial (timed) blockouts.
+    for (const b of blockouts) {
+      if (b.from_time === null || dateStr < b.start_date || dateStr > b.end_date) continue;
+      const bs = toMs0(b.from_time), be = toMs0(b.to_time);
+      const next = [];
+      for (const [s, e] of ivs) {
+        if (be <= s || bs >= e) { next.push([s, e]); continue; }
+        if (bs > s) next.push([s, bs]);
+        if (be < e) next.push([be, e]);
+      }
+      ivs = next;
+    }
+    return ivs.map(([s, e]) => ({ start: ds + s, end: ds + e })).sort((a, b) => a.start - b.start);
+  };
+
+  // Earliest available moment at/after `ms` for a resource.
+  const nextAvail = (resource, ms) => {
+    let probe = ms;
+    for (let i = 0; i < 1095; i++) { // up to ~3 years of days
+      const ds = dayStart(probe);
+      for (const iv of dayIntervals(resource, ds)) {
+        if (probe < iv.start) return iv.start;
+        if (probe < iv.end)   return probe;
+      }
+      probe = ds + 86400000;
+    }
+    return probe;
+  };
+
+  // End of the availability interval containing `ms` (else `ms`).
+  const intervalEndAt = (resource, ms) => {
+    for (const iv of dayIntervals(resource, dayStart(ms))) {
+      if (ms >= iv.start && ms < iv.end) return iv.end;
+    }
+    return ms;
   };
 
   // ── Global priority list-scheduler ─────────────────────────────────────────
@@ -173,10 +178,10 @@ async function realignSchedule(resources, tasks, projects) {
     const trs = taskResources(t);
     const resolve = startMs => {
       let c = startMs;
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 400; i++) {
         const before = c;
         for (const r of trs) {
-          c = nextSlotInWindow(c, r, blockoutsByResource[r.id] || []);
+          c = nextAvail(r, c);
           c = skipPinned(c, dur, obstaclesByResource.get(r.id));
         }
         if (c === before) break;
@@ -184,14 +189,21 @@ async function realignSchedule(resources, tasks, projects) {
       return c;
     };
     let cursor = resolve(earliestStart(t));
-    // Fit-to-window: don't split a task across a day boundary on human/ai resources.
-    for (const r of trs) {
-      if (r.kind === 'human' || r.kind === 'ai') {
-        const wE = winEnd(cursor, r), wS = winStart(cursor, r);
-        if (cursor + dur > wE && cursor > wS) {
-          cursor = resolve(nextSlotInWindow(wE, r, blockoutsByResource[r.id] || []));
+    // Fit-to-window: keep a task inside a single availability interval on human/ai
+    // resources (don't split it across an unavailable gap). cpu/gpu run
+    // continuously and may span intervals/days.
+    for (let i = 0; i < 400; i++) {
+      let bumped = false;
+      for (const r of trs) {
+        if (r.kind !== 'human' && r.kind !== 'ai') continue;
+        const end = intervalEndAt(r, cursor);
+        if (end > cursor && cursor + dur > end) {
+          cursor = resolve(nextAvail(r, end));
+          bumped = true;
+          break;
         }
       }
+      if (!bumped) break;
     }
     return cursor;
   };
