@@ -12,14 +12,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Iterable, Iterator, Optional
+from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
 from app.models import (
-    Resource, ResourceBlockout, ResourceCalBlock, ResourceWindow, Task, TaskResource,
+    AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock,
+    ResourceWindow, Task, TaskResource, TaskStatus,
 )
 
 _EPS = 1e-6  # tolerance for float hour comparisons
+
+# How far ahead the re-flow scheduler will search for a slot. A task that does
+# not fit anywhere in this window is reported as unschedulable rather than being
+# stamped with a bogus far-future date (the failure mode of the reverted rework).
+SCHED_HORIZON_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -299,3 +306,246 @@ def resource_conflicts(
         windows=windows or None,
         blockouts=blockouts or None,
     )
+
+
+# ── Re-flow scheduler ───────────────────────────────────────────────────────
+# Priority-driven, dependency-correct, backfilling placement of todo tasks.
+#
+# Tasks are placed in (project.priority, project.id, task.id) order using a
+# readiness loop: a task becomes placeable only once its predecessor is placed,
+# so dependencies are honored across resources AND across projects. Each task is
+# dropped into the earliest free slot on all of its resources (backfilling gaps
+# higher-priority work left behind). A task that does not fit within the search
+# horizon, or whose dependency can never resolve, is left untouched and reported
+# — never written a bogus date.
+
+Interval = tuple[datetime, datetime]
+
+
+def _available_intervals_on_day(
+    resource: Resource,
+    day: date,
+    windows: "list[ResourceWindow] | None",
+    blockouts: "list[ResourceBlockout] | None",
+) -> list[Interval]:
+    """The resource's free-to-work datetime intervals on `day` (window minus
+    blockouts). Mirrors the hour math in `resource_capacity_on_day`, but returns
+    concrete datetime intervals instead of a summed hour count."""
+    dow = day.weekday()
+    hours: list[tuple[float, float]] = []
+    if windows is not None:
+        for w in windows:
+            if w.day_of_week == dow:
+                hours.append((_hhmm_to_hours(w.from_time), _hhmm_to_hours(w.to_time)))
+    elif resource.available_days and (resource.available_days & (1 << dow)):
+        hours.append(
+            (_hhmm_to_hours(resource.available_from), _hhmm_to_hours(resource.available_to))
+        )
+    if not hours:
+        return []
+    if blockouts:
+        for b in blockouts:
+            if not (b.start_date <= day <= b.end_date):
+                continue
+            if b.from_time is None:
+                return []  # full-day blockout
+            hours = _subtract_interval(
+                hours, _hhmm_to_hours(b.from_time), _hhmm_to_hours(b.to_time)
+            )
+    day_start = datetime.combine(day, time.min)
+    return [
+        (day_start + timedelta(hours=s), day_start + timedelta(hours=e))
+        for s, e in hours
+        if e > s
+    ]
+
+
+def _subtract_busy(intervals: list[Interval], busy: list[Interval]) -> list[Interval]:
+    """Remove every busy interval from `intervals` (datetime version of
+    `_subtract_interval`)."""
+    out = list(intervals)
+    for bs, be in busy:
+        nxt: list[Interval] = []
+        for s, e in out:
+            if be <= s or bs >= e:
+                nxt.append((s, e))
+                continue
+            if bs > s:
+                nxt.append((s, bs))
+            if be < e:
+                nxt.append((be, e))
+        out = nxt
+    return out
+
+
+def _intersect(a: list[Interval], b: list[Interval]) -> list[Interval]:
+    """Pairwise intersection of two interval lists."""
+    out: list[Interval] = []
+    for s1, e1 in a:
+        for s2, e2 in b:
+            s, e = max(s1, s2), min(e1, e2)
+            if e > s:
+                out.append((s, e))
+    return out
+
+
+def _earliest_slot(
+    resources: list[Resource],
+    earliest: datetime,
+    dur: timedelta,
+    busy: dict[int, list[Interval]],
+    windows_by_res: dict[int, list[ResourceWindow]],
+    blockouts_by_res: dict[int, list[ResourceBlockout]],
+) -> Optional[datetime]:
+    """Earliest start ≥ `earliest` where a `dur`-long block fits, contiguously
+    (no day-boundary split), on EVERY listed resource at once. None if no slot
+    exists within SCHED_HORIZON_DAYS."""
+    if not resources:
+        return None
+    start_day = earliest.date()
+    for off in range(SCHED_HORIZON_DAYS + 1):
+        day = start_day + timedelta(days=off)
+        free: Optional[list[Interval]] = None
+        for r in resources:
+            avail = _available_intervals_on_day(
+                r, day, windows_by_res.get(r.id), blockouts_by_res.get(r.id)
+            )
+            avail = _subtract_busy(avail, busy.get(r.id, []))
+            free = avail if free is None else _intersect(free, avail)
+            if not free:
+                break
+        if not free:
+            continue
+        for s, e in sorted(free):
+            cand = max(s, earliest)
+            if cand + dur <= e:
+                return cand
+    return None
+
+
+def _task_duration(task: Task) -> timedelta:
+    """Block length to schedule: the duration field (hours), else the existing
+    start→end span, else 1 hour."""
+    if task.duration:
+        return timedelta(hours=task.duration)
+    if task.start_date and task.end_date and task.end_date > task.start_date:
+        return task.end_date - task.start_date
+    return timedelta(hours=1)
+
+
+def reflow_schedule(session: Session) -> dict:
+    """Recompute start/end for all todo tasks, highest-priority project first,
+    backfilling resource gaps and honoring dependency chains across resources and
+    projects. Commits nothing — the caller commits. Returns a summary dict:
+    {changed, pinned, unscheduled: [{id, title, reason}]}."""
+    settings = session.get(AppSettings, 1)
+    tz = ZoneInfo(settings.timezone if settings else "UTC")
+    now = datetime.now(tz).replace(tzinfo=None, second=0, microsecond=0)
+
+    projects = {p.id: p for p in session.exec(select(Project)).all()}
+    resources = {r.id: r for r in session.exec(select(Resource)).all()}
+    tasks = list(session.exec(select(Task)).all())
+    tasks_by_id = {t.id: t for t in tasks}
+
+    res_by_task: dict[int, list[int]] = {}
+    for tr in session.exec(select(TaskResource)).all():
+        res_by_task.setdefault(tr.task_id, []).append(tr.resource_id)
+
+    windows_by_res: dict[int, list[ResourceWindow]] = {}
+    for w in session.exec(select(ResourceWindow)).all():
+        windows_by_res.setdefault(w.resource_id, []).append(w)
+    blockouts_by_res: dict[int, list[ResourceBlockout]] = {}
+    for b in session.exec(select(ResourceBlockout)).all():
+        blockouts_by_res.setdefault(b.resource_id, []).append(b)
+    for blk in session.exec(select(ResourceCalBlock)).all():
+        blockouts_by_res.setdefault(blk.resource_id, []).extend(calblock_segments(blk))
+
+    # Immovable obstacles: in-flight/finished tasks and pinned todos hold their
+    # slots so movable work routes around them. end_of seeds dependency
+    # resolution for those same tasks.
+    busy: dict[int, list[Interval]] = {rid: [] for rid in resources}
+    end_of: dict[int, datetime] = {}
+    FIXED = {TaskStatus.in_progress, TaskStatus.done, TaskStatus.failed}
+    for t in tasks:
+        if not (t.start_date and t.end_date):
+            continue
+        if t.status in FIXED or (t.status == TaskStatus.todo and t.pinned):
+            for rid in res_by_task.get(t.id, []):
+                if rid in busy:
+                    busy[rid].append((t.start_date, t.end_date))
+            end_of[t.id] = t.end_date
+
+    def prio(t: Task) -> tuple[int, int, int]:
+        p = projects.get(t.project_id)
+        return ((p.priority if p else 3), t.project_id, t.id)
+
+    # Movable: unpinned todos with at least one resource. (Resource-less tasks
+    # can't occupy a timeline; like the previous scheduler, they're left alone.)
+    remaining = sorted(
+        (t for t in tasks
+         if t.status == TaskStatus.todo and not t.pinned and res_by_task.get(t.id)),
+        key=prio,
+    )
+
+    placed: dict[int, Interval] = {}
+    unscheduled: list[dict] = []
+
+    # Readiness loop: each pass places the single highest-priority task whose
+    # dependency is already resolved, then restarts so newly-unblocked dependents
+    # are reconsidered in priority order. Stops when no remaining task is ready.
+    guard = 0
+    while remaining and guard < 10000:
+        guard += 1
+        picked = None
+        for t in remaining:
+            if t.depends_on_id is not None:
+                if t.depends_on_id not in end_of:
+                    continue  # dependency not (yet) placed — skip
+                earliest = max(now, end_of[t.depends_on_id])
+            else:
+                earliest = now
+            rids = [r for r in res_by_task.get(t.id, []) if r in resources]
+            slot = _earliest_slot(
+                [resources[r] for r in rids],
+                earliest, _task_duration(t), busy, windows_by_res, blockouts_by_res,
+            )
+            if slot is None:
+                unscheduled.append({"id": t.id, "title": t.title,
+                                    "reason": "no availability within horizon"})
+            else:
+                end = slot + _task_duration(t)
+                placed[t.id] = (slot, end)
+                end_of[t.id] = end
+                for r in rids:
+                    busy[r].append((slot, end))
+            picked = t
+            break
+        if picked is None:
+            break  # nothing ready — the rest depend on unresolvable predecessors
+        remaining.remove(picked)
+
+    # Anything still remaining never became ready: cyclic, or depends on a
+    # blocked / unschedulable / deleted predecessor.
+    for t in remaining:
+        dep = tasks_by_id.get(t.depends_on_id) if t.depends_on_id else None
+        reason = ("dependency was deleted" if (t.dependency_broken or
+                  (t.depends_on_id and dep is None))
+                  else "blocked by an unscheduled dependency")
+        unscheduled.append({"id": t.id, "title": t.title, "reason": reason})
+
+    # Apply: write moved tasks, strip blocked tasks' dates, leave the rest alone.
+    changed = 0
+    for tid, (start, end) in placed.items():
+        t = tasks_by_id[tid]
+        if t.start_date is None or abs((start - t.start_date).total_seconds()) >= 60:
+            t.start_date, t.end_date = start, end
+            session.add(t)
+            changed += 1
+    for t in tasks:
+        if t.status == TaskStatus.blocked and (t.start_date or t.end_date):
+            t.start_date = t.end_date = None
+            session.add(t)
+            changed += 1
+
+    pinned = sum(1 for t in tasks if t.status == TaskStatus.todo and t.pinned)
+    return {"changed": changed, "pinned": pinned, "unscheduled": unscheduled}

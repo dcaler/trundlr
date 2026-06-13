@@ -123,15 +123,14 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
     btn.disabled = true;
     btn.textContent = 'Re-flowing…';
     try {
-      const [resources, taskList, projects] = await Promise.all([
-        api.get('/resources/'), api.get('/tasks/'), api.get('/projects/'),
-      ]);
-      const count = await realignSchedule(resources, taskList, projects);
-      if (count === 0) {
+      const result = await reflowSchedule();
+      const hasUnscheduled = result.unscheduled && result.unscheduled.length;
+      if (result.changed === 0 && !hasUnscheduled) {
         alert('Tasks are already in priority order — no changes needed.');
         btn.disabled = false;
         btn.textContent = '↺ Re-flow';
       } else {
+        if (hasUnscheduled) alert(reflowSummary(result));
         await showTaskBoard(el, showCompleted, resourceFilter);
       }
     } catch (err) {

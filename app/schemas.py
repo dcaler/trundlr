@@ -328,3 +328,15 @@ class SettingsUpdate(BaseModel):
         except (ZoneInfoNotFoundError, KeyError):
             raise ValueError(f"'{v}' is not a valid IANA timezone")
         return v
+
+
+class UnscheduledTaskRead(BaseModel):
+    id: int
+    title: str
+    reason: str
+
+
+class ReflowResultRead(BaseModel):
+    changed: int
+    pinned: int
+    unscheduled: list[UnscheduledTaskRead] = []
