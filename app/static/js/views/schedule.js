@@ -15,232 +15,30 @@ function cssLabelW() {
   return isNaN(v) ? 160 : v;
 }
 
-// ── Availability helpers ──────────────────────────────────────────────────
+// ── Re-flow: delegate to the backend priority-driven scheduler ──────────────
+// The scheduler (POST /schedule/reflow) recomputes start/end for every todo
+// task: highest-priority project first, fastest feasible path given dependencies
+// and resource availability, backfilling gaps, and honoring dependency chains
+// across resources and projects. Unschedulable tasks are left untouched and
+// reported rather than stamped with bogus dates.
 
-// Advance cursorMs to the next moment inside resource.available_from/to/days,
-// skipping any blockout periods.  If cursor is already in a valid slot, returns it.
-function nextSlotInWindow(cursorMs, resource, blockouts = []) {
-  const timeToMs = t => { const [h, m] = t.split(':').map(Number); return (h * 60 + m) * 60000; };
-  const fmtDate  = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-
-  const fromMs = timeToMs(resource.available_from || '00:00');
-  const toMs   = timeToMs(resource.available_to   || '23:59');
-
-  let probe = cursorMs;
-  for (let i = 0; i < 730; i++) {
-    const d        = new Date(probe);
-    const dateStr  = fmtDate(d);
-    const dow      = (d.getDay() + 6) % 7; // 0=Mon … 6=Sun
-    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const nextDay  = dayStart + 86400000 + fromMs;
-
-    // Full-day blockout — skip entire day
-    if (blockouts.some(b => b.from_time === null && dateStr >= b.start_date && dateStr <= b.end_date)) {
-      probe = nextDay; continue;
-    }
-
-    // Not an available workday — skip to next day
-    if (!(resource.available_days & (1 << dow))) { probe = nextDay; continue; }
-
-    const winStart = dayStart + fromMs;
-    const winEnd   = dayStart + toMs;
-
-    if (probe < winStart) { probe = winStart; continue; } // before window — jump to start
-    if (probe >= winEnd)  { probe = nextDay;  continue; } // past window  — next day
-
-    // Inside window — skip over any partial blockout that covers probe
-    const partial = blockouts.find(b => {
-      if (b.from_time === null) return false;
-      if (dateStr < b.start_date || dateStr > b.end_date) return false;
-      const bs = dayStart + timeToMs(b.from_time);
-      const be = dayStart + timeToMs(b.to_time);
-      return probe >= bs && probe < be;
-    });
-    if (partial) { probe = dayStart + timeToMs(partial.to_time); continue; }
-
-    return probe;
-  }
-  return probe;
+async function reflowSchedule() {
+  return api.post('/schedule/reflow');
 }
 
-// ── Re-align: sort tasks by project priority per resource, sequential start times ─
-
-async function realignSchedule(resources, tasks, projects) {
-  const priorityByProject = Object.fromEntries(projects.map(p => [p.id, p.priority || 3]));
-
-  // patchMap records ALL claimed tasks (changed or not) so shared tasks aren't
-  // double-scheduled when processed by a second resource.
-  const patchMap = new Map(); // id → {start, end}
-
-  const fmt = ms => {
-    const d = new Date(ms);
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
-  };
-
-  // Resolve the end of a task using already-computed times where available.
-  // A todo/blocked task not yet placed in patchMap is unresolved → Infinity,
-  // so dependent tasks are never scheduled before their prerequisite is placed.
-  const resolvedEnd = id => {
-    if (patchMap.has(id)) return new Date(patchMap.get(id).end).getTime();
-    const t = tasks.find(t => t.id === id);
-    if (!t) return 0;
-    if (t.status === 'todo' || t.status === 'blocked') return Infinity;
-    return t.end_date ? new Date(t.end_date).getTime() : 0;
-  };
-
-  // Window boundary helpers (simple available_from/to model)
-  const winStart = (ms, r) => {
-    const [h, m] = (r.available_from || '00:00').split(':').map(Number);
-    const d = new Date(ms);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
-  };
-  const winEnd = (ms, r) => {
-    const [h, m] = (r.available_to || '23:59').split(':').map(Number);
-    const d = new Date(ms);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + (h*60+m)*60000;
-  };
-
-  // Fetch blockouts + CalDAV blocks (both reduce availability; merged so the
-  // scheduler routes around them just like manual blockouts).
-  let blockoutsByResource = {};
-  try {
-    const [bList, cbList] = await Promise.all([
-      Promise.all(resources.map(r => api.get(`/resources/${r.id}/blockouts`))),
-      Promise.all(resources.map(r => api.get(`/resources/${r.id}/calblocks`))),
-    ]);
-    blockoutsByResource = Object.fromEntries(
-      resources.map((r, i) => [r.id, [...bList[i], ...cbList[i]]])
-    );
-  } catch (_) {}
-
-  // Advance cursor so a task of `dur` ms starting at `ms` doesn't overlap any pinned slot.
-  // Uses overlap test [c, c+dur) ∩ [s.start, s.end) — loops because pushing past one slot
-  // may land inside another.
-  const skipPinned = (ms, dur, slots) => {
-    let c = ms, changed = true;
-    while (changed) {
-      changed = false;
-      for (const s of slots) {
-        if (c < s.end && c + dur > s.start) { c = s.end; changed = true; }
-      }
-    }
-    return c;
-  };
-
-  for (const resource of resources) {
-    const onResource = t => (t.resource_ids || []).includes(resource.id);
-    const blockouts  = blockoutsByResource[resource.id] || [];
-
-    // Pinned todo tasks keep their existing dates.
-    // Build obstacle list from ALL pinned tasks on this resource — regardless of
-    // whether they were already added to patchMap by an earlier resource iteration
-    // (a pinned task shared across resources must block every resource's queue).
-    const pinnedTasks = tasks.filter(t =>
-      onResource(t) && t.status === 'todo' && t.pinned && t.start_date && t.end_date
-    );
-    for (const t of pinnedTasks) {
-      if (!patchMap.has(t.id)) {
-        patchMap.set(t.id, { start: t.start_date, end: t.end_date, pinned: true });
-      }
-    }
-    const pinnedSlots = pinnedTasks.map(t => ({
-      start: new Date(t.start_date).getTime(),
-      end:   new Date(t.end_date).getTime(),
-    }));
-
-    // Only todo tasks are moved; already-claimed tasks (from earlier resource iterations) are skipped
-    const movable = tasks
-      .filter(t => onResource(t) && t.status === 'todo' && !t.pinned && !patchMap.has(t.id))
-      .sort((a, b) => {
-        const pa = priorityByProject[a.project_id] || 3;
-        const pb = priorityByProject[b.project_id] || 3;
-        return pa !== pb ? pa - pb : a.id - b.id; // stable tiebreaker → idempotent
-      });
-
-    if (!movable.length) continue;
-
-    // Cursor floor: after the last in-flight task (in_progress/done/failed only;
-    // blocked tasks are ignored and don't occupy queue space).
-    const fixedTasks = tasks.filter(t => onResource(t) && t.end_date && !['todo', 'blocked'].includes(t.status));
-    const fixedEnd   = fixedTasks.reduce((mx, t) => Math.max(mx, new Date(t.end_date).getTime()), 0);
-
-    let cursor = Math.max(fixedEnd, Date.now());
-
-    console.log(`[realign] ${resource.name}: fixedEnd=${fixedEnd ? new Date(fixedEnd).toISOString() : 'none'} (${fixedTasks.length} fixed), cursor=${new Date(cursor).toISOString()}, movable=[${movable.map(t => `#${t.id}`).join(',')}]`);
-
-    // Greedy scheduler: at each cursor position pick the highest-priority task
-    // whose dependency is already satisfied.  When nothing is ready, jump the
-    // cursor to the earliest dep-resolution point so lower-priority free tasks
-    // can backfill gaps left by constrained high-priority tasks.
-    const remaining = [...movable];
-    for (let guard = 0; remaining.length && guard < 1000; guard++) {
-      const idx = remaining.findIndex(t =>
-        !t.depends_on_id || resolvedEnd(t.depends_on_id) <= cursor
-      );
-
-      if (idx === -1) {
-        // Nothing ready yet — jump to earliest dependency resolution
-        const nextMs = Math.min(...remaining
-          .filter(t => t.depends_on_id)
-          .map(t => resolvedEnd(t.depends_on_id)));
-        if (!isFinite(nextMs) || nextMs <= cursor) break;
-        cursor = nextMs;
-        continue;
-      }
-
-      const task = remaining.splice(idx, 1)[0];
-      const dur = task.start_date && task.end_date
-        ? new Date(task.end_date).getTime() - new Date(task.start_date).getTime()
-        : (task.duration || 1) * 3600000;
-
-      if (task.depends_on_id) cursor = Math.max(cursor, resolvedEnd(task.depends_on_id));
-
-      // Advance past window gaps and pinned slots, iterating until stable —
-      // skipping a pinned slot may push cursor outside the availability window.
-      for (let adj = 0; adj < 100; adj++) {
-        const before = cursor;
-        cursor = nextSlotInWindow(cursor, resource, blockouts);
-        cursor = skipPinned(cursor, dur, pinnedSlots);
-        if (cursor === before) break;
-      }
-      // Fit-to-window: don't split a task across a day boundary (human/ai only).
-      if (resource.kind === 'human' || resource.kind === 'ai') {
-        const wE = winEnd(cursor, resource), wS = winStart(cursor, resource);
-        if (cursor + dur > wE && cursor > wS) {
-          cursor = nextSlotInWindow(wE, resource, blockouts);
-          cursor = skipPinned(cursor, dur, pinnedSlots);
-        }
-      }
-
-      patchMap.set(task.id, { start: fmt(cursor), end: fmt(cursor + dur) });
-      cursor += dur;
-    }
+// Human-readable summary of a reflow result for an alert().
+function reflowSummary(r) {
+  const lines = [];
+  if (r.changed === 0) {
+    lines.push('Tasks are already in priority order — no changes needed.');
+  } else {
+    lines.push(`Re-flowed: ${r.changed} change${r.changed === 1 ? '' : 's'}.`);
   }
-
-  // PATCH only tasks whose time actually changed; return the count of changes
-  // Compare timestamps, not strings — API may return with timezone suffixes or microseconds
-  let changed = 0;
-  for (const [id, { start, end, pinned }] of patchMap.entries()) {
-    if (pinned) continue; // pinned tasks keep their existing dates
-    const task = tasks.find(t => t.id === id);
-    const storedMs   = task?.start_date ? new Date(task.start_date).getTime() : null;
-    const computedMs = new Date(start).getTime();
-    if (storedMs === null || Math.abs(computedMs - storedMs) >= 60000) {
-      await api.patch(`/tasks/${id}`, { start_date: start, end_date: end });
-      changed++;
-    }
+  if (r.unscheduled && r.unscheduled.length) {
+    lines.push('', `${r.unscheduled.length} task${r.unscheduled.length === 1 ? '' : 's'} couldn't be scheduled:`);
+    r.unscheduled.forEach(u => lines.push(`• ${u.title} — ${u.reason}`));
   }
-
-  // Strip dates from blocked tasks — they should not appear on the timeline
-  for (const task of tasks) {
-    if (task.status !== 'blocked') continue;
-    if (!task.start_date && !task.end_date) continue;
-    await api.patch(`/tasks/${task.id}`, { start_date: null, end_date: null });
-    changed++;
-  }
-
-  return changed;
+  return lines.join('\n');
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────
@@ -735,12 +533,14 @@ async function showSchedule(el) {
       btn.disabled = true;
       btn.textContent = 'Re-flowing…';
       try {
-        const count = await realignSchedule(resources, tasks, projects);
-        if (count === 0) {
+        const result = await reflowSchedule();
+        const hasUnscheduled = result.unscheduled && result.unscheduled.length;
+        if (result.changed === 0 && !hasUnscheduled) {
           alert('Tasks are already in priority order — no changes needed.');
           btn.disabled = false;
           btn.textContent = '↺ Re-flow';
         } else {
+          if (hasUnscheduled) alert(reflowSummary(result));
           await render();
         }
       } catch (err) {

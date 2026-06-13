@@ -6,8 +6,8 @@ from sqlmodel import Session, select
 
 from app.database import get_db
 from app.models import Resource, ResourceBlockout, ResourceCalBlock, ResourceWindow, Task, TaskResource
-from app.scheduling import calblock_segments, compute_utilization, resource_conflicts, resource_schedule
-from app.schemas import ConflictRead, DayUtilizationRead, ResourceScheduleRead
+from app.scheduling import calblock_segments, compute_utilization, reflow_schedule, resource_conflicts, resource_schedule
+from app.schemas import ConflictRead, DayUtilizationRead, ReflowResultRead, ResourceScheduleRead
 from app.validation import MAX_RANGE_DAYS, DBId
 
 router = APIRouter(tags=["schedule"])
@@ -23,6 +23,16 @@ def _require_valid_range(from_date: date, to_date: date) -> None:
             status_code=422,
             detail=f"date range must not exceed {MAX_RANGE_DAYS} days",
         )
+
+
+@router.post("/api/schedule/reflow", response_model=ReflowResultRead)
+def reflow(session: Session = Depends(get_db)):
+    """Re-flow all todo tasks: priority-driven, dependency-correct, backfilling.
+    Computes new start/end times, applies them, and reports any tasks that could
+    not be scheduled (left untouched rather than stamped with a bogus date)."""
+    result = reflow_schedule(session)
+    session.commit()
+    return result
 
 
 @router.get("/api/resources/{resource_id}/schedule", response_model=List[DayUtilizationRead])
