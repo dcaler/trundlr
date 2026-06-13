@@ -8,8 +8,9 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceWindow, Task, TaskResource, TaskStatus
+from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock, ResourceWindow, Task, TaskResource, TaskStatus
 from app.schemas import BlockoutCreate, BlockoutRead, ResourceCreate, ResourceRead, ResourceUpdate, WindowCreate, WindowRead
+from app.scheduling import calblock_segments
 from app.validation import DBId
 
 router = APIRouter(prefix="/api/resources", tags=["resources"])
@@ -217,3 +218,29 @@ def delete_blockout(
         raise HTTPException(status_code=404, detail="Blockout not found")
     session.delete(blockout)
     session.commit()
+
+
+# ── CalDAV blocks (read-only mirror for the schedule view) ─────────────────────
+# These are painted in the resource's "{name}-block" CalDAV calendar and managed
+# entirely over CalDAV (PUT/DELETE). This endpoint exposes them as per-day,
+# blockout-shaped segments so the schedule view can shade them red and re-flow
+# can route around them — deliberately separate from /blockouts, which stays
+# manual-only and never lists these.
+
+@router.get("/{resource_id}/calblocks")
+def list_calblocks(resource_id: int = DBId(), session: Session = Depends(get_db)):
+    if not session.get(Resource, resource_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    blocks = session.exec(
+        select(ResourceCalBlock).where(ResourceCalBlock.resource_id == resource_id)
+    ).all()
+    return [
+        {
+            "start_date": seg.start_date.isoformat(),
+            "end_date": seg.end_date.isoformat(),
+            "from_time": seg.from_time,
+            "to_time": seg.to_time,
+        }
+        for block in blocks
+        for seg in calblock_segments(block)
+    ]
