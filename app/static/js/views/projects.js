@@ -16,11 +16,20 @@ function prioritySelect(selected = 3) {
   </select>`;
 }
 
-// Current time as a UTC ISO string "YYYY-MM-DDTHH:MM:00"
+// Current wall-clock time in the app's configured timezone, as a naive ISO
+// string "YYYY-MM-DDTHH:MM:00". Stored datetimes are entered and interpreted
+// in appSettings.timezone (see Settings + the iCal/CalDAV feeds), so "now"
+// must be computed in that zone too — stamping it in UTC (or raw browser
+// local time) shifts every auto-recorded start/end by the tz offset.
 function nowIsoStr() {
-  const d = new Date();
-  const p = n => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:00`;
+  const tz = (typeof appSettings !== 'undefined' && appSettings.timezone) || 'UTC';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date()).reduce((o, p) => (o[p.type] = p.value, o), {});
+  const hour = parts.hour === '24' ? '00' : parts.hour;  // some engines emit "24" at midnight
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:00`;
 }
 
 // Format ISO datetime string for display: "2025-06-01T09:00:00" → "2025-06-01 09:00"
@@ -520,11 +529,13 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       if (sel.value === 'in_progress') {
         patch.start_date = nowIsoStr();
       } else if (sel.value === 'done') {
-        const now = new Date();
         patch.end_date = nowIsoStr();
         const task = taskById[parseInt(sel.dataset.id)];
         if (task?.start_date) {
-          const durH = (now.getTime() - new Date(task.start_date.replace(' ', 'T') + 'Z').getTime()) / 3600000;
+          // Both are naive wall-clock strings in the same (configured) zone;
+          // parse both as UTC so the tz offset cancels and we get real elapsed hours.
+          const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
+          const durH = (Date.parse(patch.end_date + 'Z') - startMs) / 3600000;
           if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
         }
       }
