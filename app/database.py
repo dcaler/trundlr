@@ -196,6 +196,18 @@ def apply_migrations(engine):
             conn.execute(text("ALTER TABLE cyclestep ADD COLUMN command TEXT"))
             conn.commit()
 
+        # resourcecalblock.uid added after the block-calendar feature shipped.
+        # Existing rows keep their original href (block-{id}@trundlr) so already-
+        # synced blocks don't churn; new rows store the client's resource name.
+        result = conn.execute(text("PRAGMA table_info(resourcecalblock)"))
+        rcb_cols = {row[1] for row in result}
+        if rcb_cols and "uid" not in rcb_cols:
+            conn.execute(text("ALTER TABLE resourcecalblock ADD COLUMN uid TEXT"))
+            conn.execute(text(
+                "UPDATE resourcecalblock SET uid = 'block-' || id || '@trundlr' WHERE uid IS NULL"
+            ))
+            conn.commit()
+
         result = conn.execute(text("PRAGMA table_info(appsettings)"))
         appsettings_cols = {row[1] for row in result}
         if "caldav_default_project_id" not in appsettings_cols:

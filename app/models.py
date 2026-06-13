@@ -151,6 +151,10 @@ class ResourceCalBlock(SQLModel, table=True):
     """
     id: Optional[int] = Field(default=None, primary_key=True)
     resource_id: int = Field(foreign_key="resource.id", index=True)
+    # The CalDAV resource name (href filename, sans .ics) the client created the
+    # event at. We serve the block back at this exact href so the client doesn't
+    # see a server-renamed copy and duplicate the event.
+    uid: str = Field(index=True)
     start: datetime
     end: datetime
     summary: Optional[str] = Field(default=None)  # painted event title
