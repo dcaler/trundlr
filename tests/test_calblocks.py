@@ -66,6 +66,17 @@ def _block_ical(uid, dtstart, dtend, summary="Lunch"):
     )
 
 
+def _sync_collection_body(token=""):
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<d:sync-collection xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">'
+        f'<d:sync-token>{token}</d:sync-token>'
+        '<d:sync-level>1</d:sync-level>'
+        '<d:prop><d:getetag/><cal:calendar-data/></d:prop>'
+        '</d:sync-collection>'
+    )
+
+
 def _responses(root):
     out = []
     for resp in root.findall(_d("response")):
@@ -99,28 +110,52 @@ def test_block_calendar_enumerated_in_home(client):
 
 def test_put_creates_block_and_roundtrips(client, session):
     rid = client.post("/api/resources/", json=HUMAN).json()["id"]
+    href = f"/caldav/calendars/block-{rid}/abc.ics"
 
     put = client.put(
-        f"/caldav/calendars/block-{rid}/abc.ics",
-        content=_block_ical("client-uid-1", "20260615T090000Z", "20260615T130000Z"),
+        href,
+        content=_block_ical("abc", "20260615T090000Z", "20260615T130000Z"),
         headers={"Content-Type": "text/calendar"},
     )
     assert put.status_code == 201
-    loc = put.headers["Location"]
-    assert loc.startswith(f"/caldav/calendars/block-{rid}/block-")
-
+    # No rename: the block is keyed by the client's resource name ("abc").
+    assert "Location" not in put.headers
     blocks = session.exec(select(ResourceCalBlock)).all()
-    assert len(blocks) == 1 and blocks[0].resource_id == rid
+    assert len(blocks) == 1 and blocks[0].resource_id == rid and blocks[0].uid == "abc"
 
-    # GET the created event back.
-    got = client.get(loc)
+    # GET it back at the same href the client created it at.
+    got = client.get(href)
     assert got.status_code == 200
     assert "Lunch" in got.text
-    assert "block-" in got.text and "@trundlr" in got.text
+    assert "UID:abc" in got.text
 
     # DELETE removes it.
-    assert client.delete(loc).status_code == 204
+    assert client.delete(href).status_code == 204
     assert session.exec(select(ResourceCalBlock)).all() == []
+
+
+def test_block_served_at_client_href_no_duplicate(client):
+    """Regression: a block must appear in REPORT under the SAME href the client
+    PUT it to, otherwise Apple Calendar ends up with a duplicate."""
+    rid = client.post("/api/resources/", json=HUMAN).json()["id"]
+    href = f"/caldav/calendars/block-{rid}/CLIENT-GUID-123.ics"
+    client.put(
+        href,
+        content=_block_ical("CLIENT-GUID-123", "20260615T090000Z", "20260615T100000Z"),
+        headers={"Content-Type": "text/calendar"},
+    )
+
+    report = client.request(
+        "REPORT", f"/caldav/calendars/block-{rid}/",
+        headers={"Depth": "1", "Content-Type": "application/xml"},
+        content=_sync_collection_body(),
+    )
+    assert report.status_code == 207
+    hrefs = [
+        h for h, status, _ in _responses(ET.fromstring(report.text))
+        if h and h.endswith(".ics")
+    ]
+    assert hrefs == [href]  # exactly one, at the client's own href
 
 
 # ── Read endpoint + isolation from manual blockouts ────────────────────────────

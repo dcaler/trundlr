@@ -184,21 +184,22 @@ def _scheduled(tasks: list) -> list:
 _SYNC_PREFIX = "urn:trundlr:sync:"
 
 
-def _sync_token(ids: set) -> str:
-    # The token encodes the set of event task-ids present at this sync, plus a
+def _sync_token(keys: set) -> str:
+    # The token encodes the set of member keys present at this sync, plus a
     # nonce so it changes every time (Apple then always issues a fresh
     # sync-collection REPORT). On the next REPORT the client echoes this token
-    # back; we decode the id set and diff it against current ids to discover
-    # which events were deleted — no server-side tombstones required.
-    payload = ",".join(str(i) for i in sorted(ids))
+    # back; we decode the key set and diff it against current keys to discover
+    # which events were deleted — no server-side tombstones required. Keys are
+    # opaque strings (task ids for tasks, resource names for blocks).
+    payload = ",".join(sorted(str(k) for k in keys))
     return f"{_SYNC_PREFIX}{payload}|{os.urandom(4).hex()}"
 
 
-def _parse_sync_token_ids(token: Optional[str]) -> set:
+def _parse_sync_token_keys(token: Optional[str]) -> set:
     if not token or not token.startswith(_SYNC_PREFIX):
         return set()
-    id_part = token[len(_SYNC_PREFIX):].split("|", 1)[0]
-    return {int(c) for c in id_part.split(",") if c.strip().isdigit()}
+    key_part = token[len(_SYNC_PREFIX):].split("|", 1)[0]
+    return {c for c in key_part.split(",") if c}
 
 
 # ── iCal helpers ───────────────────────────────────────────────────────────
@@ -243,7 +244,7 @@ def _block_to_ical(block: ResourceCalBlock, tz: ZoneInfo) -> str:
     cal.add("version", "2.0")
 
     ev = Event()
-    ev.add("uid", f"block-{block.id}@trundlr")
+    ev.add("uid", block.uid)
     ev.add("summary", block.summary or "Blocked")
 
     def _to_utc(dt: datetime) -> datetime:
@@ -304,15 +305,6 @@ def _parse_task_id(uid: str) -> Optional[int]:
     return None
 
 
-def _parse_block_id(uid: str) -> Optional[int]:
-    if uid.startswith("block-") and uid.endswith("@trundlr"):
-        try:
-            return int(uid[6:-8])
-        except ValueError:
-            return None
-    return None
-
-
 def _resolve_cal(cal: str) -> Optional[tuple]:
     """Map a calendar path segment to (resource_id, is_block).
 
@@ -352,6 +344,14 @@ def _blocks_for_resource(session: Session, rid: int) -> list:
     return list(session.exec(
         select(ResourceCalBlock).where(ResourceCalBlock.resource_id == rid)
     ).all())
+
+
+def _block_by_uid(session: Session, rid: int, uid: str):
+    return session.exec(
+        select(ResourceCalBlock).where(
+            ResourceCalBlock.resource_id == rid, ResourceCalBlock.uid == uid
+        )
+    ).first()
 
 
 # ── Prop builders ──────────────────────────────────────────────────────────
@@ -467,7 +467,7 @@ async def caldav_calendars_home(request: Request, session: Session = Depends(get
             tasks = _scheduled(_tasks_for_resource(session, resource.id))
             t_found, t_missing = _calendar_collection_props(
                 resource.name, _collection_ctag(tasks),
-                _sync_token({t.id for t in tasks}), requested,
+                _sync_token({str(t.id) for t in tasks}), requested,
             )
             responses.append((f"/caldav/calendars/{resource.id}/", t_found, t_missing))
 
@@ -475,7 +475,7 @@ async def caldav_calendars_home(request: Request, session: Session = Depends(get
             blocks = _blocks_for_resource(session, resource.id)
             b_found, b_missing = _calendar_collection_props(
                 f"{resource.name}-block", _collection_ctag(blocks),
-                _sync_token({b.id for b in blocks}), requested,
+                _sync_token({b.uid for b in blocks}), requested,
             )
             responses.append((f"/caldav/calendars/block-{resource.id}/", b_found, b_missing))
 
@@ -505,6 +505,25 @@ async def caldav_calendar_proppatch(cal: str, request: Request, session: Session
 
 
 # ── PROPFIND /caldav/calendars/{cal}/ ──────────────────────────────────────
+
+def _member_key(member, is_block: bool) -> str:
+    """Opaque sync/identity key: a block's CalDAV resource name, else the task id."""
+    return member.uid if is_block else str(member.id)
+
+
+def _member_href(cal: str, key: str, is_block: bool) -> str:
+    # Blocks live at the client-chosen resource name; tasks at task-{id}@trundlr.
+    name = key if is_block else f"task-{key}@trundlr"
+    return f"/caldav/calendars/{cal}/{name}.ics"
+
+
+def _key_from_filename(name: str, is_block: bool) -> Optional[str]:
+    """Resolve a member key from an href filename (already stripped of .ics)."""
+    if is_block:
+        return name or None
+    tid = _parse_task_id(name)
+    return str(tid) if tid is not None else None
+
 
 def _member_props(etag: str, requested: Optional[list]) -> tuple:
     all_props = {
@@ -536,7 +555,7 @@ async def caldav_calendar_propfind(cal: str, request: Request, session: Session 
         display = resource.name
 
     ctag = _collection_ctag(members)
-    sync_token = _sync_token({m.id for m in members})
+    sync_token = _sync_token({_member_key(m, is_block) for m in members})
     found, missing = _calendar_collection_props(display, ctag, sync_token, requested)
     responses = [(f"/caldav/calendars/{cal}/", found, missing)]
 
@@ -546,10 +565,9 @@ async def caldav_calendar_propfind(cal: str, request: Request, session: Session 
         for m in members:
             if is_block:
                 etag = _block_etag(m)
-                href = f"/caldav/calendars/{cal}/block-{m.id}@trundlr.ics"
             else:
                 etag = _task_etag(m, _project_name_for_task(session, m))
-                href = f"/caldav/calendars/{cal}/task-{m.id}@trundlr.ics"
+            href = _member_href(cal, _member_key(m, is_block), is_block)
             m_found, m_missing = _member_props(etag, requested)
             responses.append((href, m_found, m_missing))
 
@@ -581,15 +599,10 @@ async def caldav_calendar_report(cal: str, request: Request, session: Session = 
     # reported as removed (404) so it isn't orphaned.
     if is_block:
         members = _blocks_for_resource(session, rid)
-        prefix = "block"
     else:
         members = _scheduled(_tasks_for_resource(session, rid))
-        prefix = "task"
-    by_id = {m.id: m for m in members}
-    current_ids = set(by_id)
-
-    def _href_for(member_id: int) -> str:
-        return f"/caldav/calendars/{cal}/{prefix}-{member_id}@trundlr.ics"
+    by_key = {_member_key(m, is_block): m for m in members}
+    current_keys = set(by_key)
 
     def _member_response(member):
         if is_block:
@@ -603,7 +616,8 @@ async def caldav_calendar_report(cal: str, request: Request, session: Session = 
         etag_el.text = etag
         caldata_el = ET.Element("_val")
         caldata_el.text = ical_str
-        return (_href_for(member.id), {
+        href = _member_href(cal, _member_key(member, is_block), is_block)
+        return (href, {
             _d("getetag"): etag_el,
             _cal("calendar-data"): caldata_el,
         }, [])
@@ -620,10 +634,10 @@ async def caldav_calendar_report(cal: str, request: Request, session: Session = 
             # Hrefs arrive percent-encoded (e.g. task-28%40trundlr.ics) — decode
             # before parsing or the "@trundlr" suffix check never matches.
             filename = unquote(el.text).rstrip("/").rsplit("/", 1)[-1]
-            uid = filename[:-4] if filename.endswith(".ics") else filename
-            member_id = _parse_block_id(uid) if is_block else _parse_task_id(uid)
-            if member_id is not None and member_id in current_ids:
-                responses.append(_member_response(by_id[member_id]))
+            name = filename[:-4] if filename.endswith(".ics") else filename
+            key = _key_from_filename(name, is_block)
+            if key is not None and key in current_keys:
+                responses.append(_member_response(by_key[key]))
             else:
                 gone.append(el.text)
         # multiget is href-driven, not delta-driven: no sync-token needed.
@@ -631,14 +645,14 @@ async def caldav_calendar_report(cal: str, request: Request, session: Session = 
 
     # sync-collection (and any other REPORT): return all current events, and
     # 404 every event the client knew about last time that is now gone. The
-    # prior id set is decoded from the sync-token the client echoes back.
-    prior_ids = _parse_sync_token_ids(root.findtext(_d("sync-token")))
+    # prior key set is decoded from the sync-token the client echoes back.
+    prior_keys = _parse_sync_token_keys(root.findtext(_d("sync-token")))
     for member in members:
         responses.append(_member_response(member))
-    for removed_id in sorted(prior_ids - current_ids):
-        gone.append(_href_for(removed_id))
+    for removed_key in sorted(prior_keys - current_keys):
+        gone.append(_member_href(cal, removed_key, is_block))
 
-    return _multistatus(responses, gone=gone, sync_token=_sync_token(current_ids))
+    return _multistatus(responses, gone=gone, sync_token=_sync_token(current_keys))
 
 
 # ── GET /caldav/calendars/{cal}/{uid_file} ─────────────────────────────────
@@ -657,9 +671,8 @@ def caldav_get_event(cal: str, uid_file: str, session: Session = Depends(get_db)
     tz = _get_tz(session)
 
     if is_block:
-        block_id = _parse_block_id(uid)
-        block = session.get(ResourceCalBlock, block_id) if block_id is not None else None
-        if not block or block.resource_id != rid:
+        block = _block_by_uid(session, rid, uid)
+        if not block:
             return Response(status_code=404)
         return Response(
             content=_block_to_ical(block, tz),
@@ -688,31 +701,33 @@ def caldav_get_event(cal: str, uid_file: str, session: Session = Depends(get_db)
 
 # ── PUT /caldav/calendars/{cal}/{uid_file} ─────────────────────────────────
 
-def _put_block(session: Session, rid: int, cal: str, uid: str, parsed: dict, tz: ZoneInfo) -> Response:
-    """Create or update a ResourceCalBlock from a PUT to the block calendar."""
+def _put_block(session: Session, rid: int, cal: str, name: str, parsed: dict, tz: ZoneInfo) -> Response:
+    """Create or update a ResourceCalBlock from a PUT to the block calendar.
+
+    `name` is the CalDAV resource name (href filename, sans .ics) the client
+    chose. We store and serve the block under exactly that name so the client
+    never sees a server-renamed copy — which is what caused duplicate events.
+    """
     start = _to_naive_dt(parsed["dtstart"], tz)
     if start is None:
         return Response(status_code=400, content="Block event needs a start time")
     end = _to_naive_dt(parsed["dtend"], tz) or (start + timedelta(hours=1))
     summary = parsed["summary"] or None
 
-    block_id = _parse_block_id(uid)
-    block = session.get(ResourceCalBlock, block_id) if block_id is not None else None
-    if block and block.resource_id == rid:
-        block.start = start
-        block.end = end
-        block.summary = summary
-        session.add(block)
-        session.commit()
-        session.refresh(block)
-        return Response(status_code=204, headers={"ETag": _block_etag(block), **_DAV_HEADERS})
-
-    block = ResourceCalBlock(resource_id=rid, start=start, end=end, summary=summary)
+    block = _block_by_uid(session, rid, name)
+    created = block is None
+    if created:
+        block = ResourceCalBlock(resource_id=rid, uid=name)
+    block.start = start
+    block.end = end
+    block.summary = summary
     session.add(block)
     session.commit()
     session.refresh(block)
-    location = f"/caldav/calendars/{cal}/block-{block.id}@trundlr.ics"
-    return Response(status_code=201, headers={"Location": location, "ETag": _block_etag(block), **_DAV_HEADERS})
+
+    headers = {"ETag": _block_etag(block), **_DAV_HEADERS}
+    # 201 with no Location: the resource lives at the same URL the client PUT to.
+    return Response(status_code=201 if created else 204, headers=headers)
 
 
 @router.put("/calendars/{cal}/{uid_file}")
@@ -736,7 +751,8 @@ async def caldav_put_event(cal: str, uid_file: str, request: Request, session: S
     uid = parsed["uid"]
 
     if is_block:
-        return _put_block(session, rid, cal, uid, parsed, tz)
+        name = uid_file[:-4] if uid_file.endswith(".ics") else uid_file
+        return _put_block(session, rid, cal, name, parsed, tz)
 
     task_id = _parse_task_id(uid)
 
@@ -806,9 +822,8 @@ def caldav_delete_event(cal: str, uid_file: str, session: Session = Depends(get_
     uid = uid_file[:-4] if uid_file.endswith(".ics") else uid_file
 
     if is_block:
-        block_id = _parse_block_id(uid)
-        block = session.get(ResourceCalBlock, block_id) if block_id is not None else None
-        if not block or block.resource_id != rid:
+        block = _block_by_uid(session, rid, uid)
+        if not block:
             return Response(status_code=404)
         session.delete(block)
         session.commit()
