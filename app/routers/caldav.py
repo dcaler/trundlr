@@ -50,7 +50,8 @@ _DAV_HEADERS = {
 
 # ── XML helpers ────────────────────────────────────────────────────────────
 
-def _multistatus(responses: list, sync_token: Optional[str] = None) -> Response:
+def _multistatus(responses: list, sync_token: Optional[str] = None,
+                 gone: Optional[list] = None) -> Response:
     """Build a 207 Multi-Status response.
 
     responses: list of (href, found, missing)
@@ -61,6 +62,9 @@ def _multistatus(responses: list, sync_token: Optional[str] = None) -> Response:
       missing: list[tag_str]
     sync_token: if set, appended as <d:sync-token> child of multistatus
                 (required for sync-collection REPORT responses).
+    gone: list of hrefs to render as <response><href/><status>404</status>,
+          i.e. members that were removed since the client's last sync. This is
+          how a sync-collection REPORT tells the client to delete an event.
     """
     root = ET.Element(_d("multistatus"))
 
@@ -89,8 +93,13 @@ def _multistatus(responses: list, sync_token: Optional[str] = None) -> Response:
                 ET.SubElement(props_404, tag)
             ET.SubElement(ps_404, _d("status")).text = "HTTP/1.1 404 Not Found"
 
+    for href_str in (gone or []):
+        resp_el = ET.SubElement(root, _d("response"))
+        ET.SubElement(resp_el, _d("href")).text = href_str
+        ET.SubElement(resp_el, _d("status")).text = "HTTP/1.1 404 Not Found"
+
     if sync_token is not None:
-        ET.SubElement(root, _d("sync-token")).text = f"urn:trundlr:sync:{sync_token}"
+        ET.SubElement(root, _d("sync-token")).text = sync_token
 
     xml_str = '<?xml version="1.0" encoding="UTF-8"?>' + ET.tostring(root, encoding="unicode")
     return Response(
@@ -141,11 +150,15 @@ def _requested_props(body: bytes) -> Optional[list]:
     return [child.tag for child in prop_el]
 
 
-# ── ETag / CTag ────────────────────────────────────────────────────────────
+# ── ETag / CTag / sync-token ────────────────────────────────────────────────
 
-def _task_etag(task: Task) -> str:
+def _task_etag(task: Task, project_name: Optional[str] = None) -> str:
+    # project_name is part of the event summary ("{project}: {title}"), so it
+    # must feed the etag too — otherwise renaming a project leaves Apple with a
+    # stale title (unchanged etag → no re-fetch). Callers that have the project
+    # name MUST pass it, consistently, so the listing etag matches the data etag.
     status_val = task.status.value if hasattr(task.status, "value") else task.status
-    raw = f"{task.id}:{task.title}:{task.description}:{task.start_date}:{task.end_date}:{status_val}"
+    raw = f"{task.id}:{project_name}:{task.title}:{task.description}:{task.start_date}:{task.end_date}:{status_val}"
     return f'"{hashlib.md5(raw.encode()).hexdigest()}"'
 
 
@@ -154,6 +167,33 @@ def _collection_ctag(tasks: list) -> str:
     # a "changed" ctag between its two PROPFIND rounds and sends REPORT.
     # Full re-fetches are cheap at this scale.
     return os.urandom(8).hex()
+
+
+def _scheduled(tasks: list) -> list:
+    # Only tasks with a start_date are real calendar events. Unscheduled tasks
+    # have no time, so emitting them produces bogus all-day events — skip them
+    # everywhere (matches the legacy /api/resources/{id}/calendar.ics feed).
+    return [t for t in tasks if t.start_date is not None]
+
+
+_SYNC_PREFIX = "urn:trundlr:sync:"
+
+
+def _sync_token(ids: set) -> str:
+    # The token encodes the set of event task-ids present at this sync, plus a
+    # nonce so it changes every time (Apple then always issues a fresh
+    # sync-collection REPORT). On the next REPORT the client echoes this token
+    # back; we decode the id set and diff it against current ids to discover
+    # which events were deleted — no server-side tombstones required.
+    payload = ",".join(str(i) for i in sorted(ids))
+    return f"{_SYNC_PREFIX}{payload}|{os.urandom(4).hex()}"
+
+
+def _parse_sync_token_ids(token: Optional[str]) -> set:
+    if not token or not token.startswith(_SYNC_PREFIX):
+        return set()
+    id_part = token[len(_SYNC_PREFIX):].split("|", 1)[0]
+    return {int(c) for c in id_part.split(",") if c.strip().isdigit()}
 
 
 # ── iCal helpers ───────────────────────────────────────────────────────────
@@ -176,14 +216,12 @@ def _task_to_ical(task: Task, resource: Resource, project_name: Optional[str], t
             return dt.replace(tzinfo=tz).astimezone(timezone.utc)
         return dt.astimezone(timezone.utc)
 
-    if task.start_date:
-        start_utc = _to_utc(task.start_date)
-        ev.add("dtstart", start_utc)
-        ev.add("dtend", _to_utc(task.end_date) if task.end_date else start_utc + timedelta(hours=1))
-    else:
-        today = date.today()
-        ev.add("dtstart", today)
-        ev.add("dtend", today + timedelta(days=1))
+    # Callers only pass scheduled tasks (start_date set); _scheduled() filters
+    # the unscheduled ones out upstream. A timed DTSTART/DTEND keeps the event
+    # from rendering as bogus all-day in Apple Calendar.
+    start_utc = _to_utc(task.start_date)
+    ev.add("dtstart", start_utc)
+    ev.add("dtend", _to_utc(task.end_date) if task.end_date else start_utc + timedelta(hours=1))
 
     # All tasks show as CONFIRMED so Apple Calendar displays them as normal
     # events. TENTATIVE renders as hatched and CANCELLED is silently hidden.
@@ -294,12 +332,13 @@ def _filter_props(all_props: dict, requested: Optional[list]) -> tuple:
     return found, missing
 
 
-def _calendar_collection_props(resource: Resource, ctag: str, requested: Optional[list]) -> tuple:
+def _calendar_collection_props(resource: Resource, ctag: str, sync_token: str,
+                               requested: Optional[list]) -> tuple:
     all_props = {
         _d("resourcetype"): _resourcetype_collection_calendar(),
         _d("displayname"): _val(resource.name),
         _cs("getctag"): _val(ctag),
-        _d("sync-token"): _val(f"urn:trundlr:sync:{ctag}"),
+        _d("sync-token"): _val(sync_token),
         _cal("supported-calendar-component-set"): _supported_calendar_component_set(),
     }
     return _filter_props(all_props, requested)
@@ -367,9 +406,10 @@ async def caldav_calendars_home(request: Request, session: Session = Depends(get
     if depth == "1":
         resources = session.exec(select(Resource)).all()
         for resource in resources:
-            tasks = _tasks_for_resource(session, resource.id)
+            tasks = _scheduled(_tasks_for_resource(session, resource.id))
             ctag = _collection_ctag(tasks)
-            found, missing = _calendar_collection_props(resource, ctag, requested)
+            sync_token = _sync_token({t.id for t in tasks})
+            found, missing = _calendar_collection_props(resource, ctag, sync_token, requested)
             responses.append((f"/caldav/calendars/{resource.id}/", found, missing))
 
     return _multistatus(responses)
@@ -398,10 +438,10 @@ async def caldav_calendar_proppatch(rid: int, request: Request, session: Session
 
 # ── PROPFIND /caldav/calendars/{rid}/ ──────────────────────────────────────
 
-def _event_member_props(task: Task, requested: Optional[list]) -> tuple:
+def _event_member_props(task: Task, project_name: Optional[str], requested: Optional[list]) -> tuple:
     all_props = {
         _d("resourcetype"): None,  # self-closing: a plain resource, not a collection
-        _d("getetag"): _val(_task_etag(task)),
+        _d("getetag"): _val(_task_etag(task, project_name)),
         _d("getcontenttype"): _val("text/calendar; component=vevent"),
     }
     return _filter_props(all_props, requested)
@@ -416,16 +456,18 @@ async def caldav_calendar_propfind(rid: int, request: Request, session: Session 
     requested = _requested_props(body)
     depth = request.headers.get("Depth", "0")
 
-    tasks = _tasks_for_resource(session, rid)
+    tasks = _scheduled(_tasks_for_resource(session, rid))
     ctag = _collection_ctag(tasks)
-    found, missing = _calendar_collection_props(resource, ctag, requested)
+    sync_token = _sync_token({t.id for t in tasks})
+    found, missing = _calendar_collection_props(resource, ctag, sync_token, requested)
     responses = [(f"/caldav/calendars/{rid}/", found, missing)]
 
     # Depth:1 enumerates the calendar's event members — the classic WebDAV
     # listing path Apple Calendar uses to discover events.
     if depth == "1":
         for task in tasks:
-            m_found, m_missing = _event_member_props(task, requested)
+            project_name = _project_name_for_task(session, task)
+            m_found, m_missing = _event_member_props(task, project_name, requested)
             href = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
             responses.append((href, m_found, m_missing))
 
@@ -448,43 +490,60 @@ async def caldav_calendar_report(rid: int, request: Request, session: Session = 
     except ET.ParseError:
         return Response(status_code=400, content="Bad XML")
 
-    tasks = _tasks_for_resource(session, rid)
-    ctag = _collection_ctag(tasks)
-    is_sync_collection = root.tag == _d("sync-collection")
+    # Only scheduled tasks are real events (see _scheduled). Unscheduled tasks
+    # must not appear, and a task that *becomes* unscheduled must be reported
+    # as removed, just like a deletion.
+    tasks = _scheduled(_tasks_for_resource(session, rid))
+    current_ids = {t.id for t in tasks}
 
-    if root.tag == _cal("calendar-multiget"):
-        hrefs = [el.text for el in root.findall(_d("href")) if el.text]
-        wanted_ids = set()
-        for href in hrefs:
-            # Hrefs arrive percent-encoded (e.g. task-28%40trundlr.ics) — decode
-            # before parsing or the "@trundlr" suffix check never matches.
-            filename = unquote(href).rstrip("/").rsplit("/", 1)[-1]
-            uid = filename[:-4] if filename.endswith(".ics") else filename
-            task_id = _parse_task_id(uid)
-            if task_id is not None:
-                wanted_ids.add(task_id)
-        tasks = [t for t in tasks if t.id in wanted_ids]
-
-    responses = []
-    for task in tasks:
+    def _event_response(task: Task):
         project_name = _project_name_for_task(session, task)
         ical_str = _task_to_ical(task, resource, project_name, tz)
-        etag = _task_etag(task)
-        href = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
-
         etag_el = ET.Element("_val")
-        etag_el.text = etag
+        etag_el.text = _task_etag(task, project_name)
         caldata_el = ET.Element("_val")
         caldata_el.text = ical_str
-
-        responses.append((href, {
+        href = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
+        return (href, {
             _d("getetag"): etag_el,
             _cal("calendar-data"): caldata_el,
-        }, []))
+        }, [])
 
-    # sync-collection responses must include <d:sync-token>; include it for
-    # all REPORT types so Apple Calendar establishes a sync baseline.
-    return _multistatus(responses, sync_token=ctag)
+    def _href_for(task_id: int) -> str:
+        return f"/caldav/calendars/{rid}/task-{task_id}@trundlr.ics"
+
+    responses = []
+    gone = []
+
+    if root.tag == _cal("calendar-multiget"):
+        # Client asks for specific hrefs. Return data for the ones that still
+        # exist; 404 the rest so a deleted/unscheduled event is dropped.
+        for el in root.findall(_d("href")):
+            if not el.text:
+                continue
+            # Hrefs arrive percent-encoded (e.g. task-28%40trundlr.ics) — decode
+            # before parsing or the "@trundlr" suffix check never matches.
+            filename = unquote(el.text).rstrip("/").rsplit("/", 1)[-1]
+            uid = filename[:-4] if filename.endswith(".ics") else filename
+            task_id = _parse_task_id(uid)
+            if task_id is not None and task_id in current_ids:
+                task = next(t for t in tasks if t.id == task_id)
+                responses.append(_event_response(task))
+            else:
+                gone.append(el.text)
+        # multiget is href-driven, not delta-driven: no sync-token needed.
+        return _multistatus(responses, gone=gone)
+
+    # sync-collection (and any other REPORT): return all current events, and
+    # 404 every event the client knew about last time that is now gone. The
+    # prior id set is decoded from the sync-token the client echoes back.
+    prior_ids = _parse_sync_token_ids(root.findtext(_d("sync-token")))
+    for task in tasks:
+        responses.append(_event_response(task))
+    for removed_id in sorted(prior_ids - current_ids):
+        gone.append(_href_for(removed_id))
+
+    return _multistatus(responses, gone=gone, sync_token=_sync_token(current_ids))
 
 
 # ── GET /caldav/calendars/{rid}/{uid_file} ─────────────────────────────────
@@ -501,13 +560,14 @@ def caldav_get_event(rid: int, uid_file: str, session: Session = Depends(get_db)
         return Response(status_code=404)
 
     task = session.get(Task, task_id)
-    if not task:
+    if not task or task.start_date is None:
+        # Unscheduled tasks are not calendar events (see _scheduled).
         return Response(status_code=404)
 
     tz = _get_tz(session)
     project_name = _project_name_for_task(session, task)
     ical_str = _task_to_ical(task, resource, project_name, tz)
-    etag = _task_etag(task)
+    etag = _task_etag(task, project_name)
 
     return Response(
         content=ical_str,
@@ -550,7 +610,7 @@ async def caldav_put_event(rid: int, uid_file: str, request: Request, session: S
             session.add(task)
             session.commit()
             session.refresh(task)
-            etag = _task_etag(task)
+            etag = _task_etag(task, project_name)
             return Response(status_code=204, headers={"ETag": etag, **_DAV_HEADERS})
 
     # New task from client — UID not recognised or not in our format
@@ -582,7 +642,7 @@ async def caldav_put_event(rid: int, uid_file: str, request: Request, session: S
     session.refresh(task)
 
     location = f"/caldav/calendars/{rid}/task-{task.id}@trundlr.ics"
-    etag = _task_etag(task)
+    etag = _task_etag(task, project_name)
     return Response(status_code=201, headers={"Location": location, "ETag": etag, **_DAV_HEADERS})
 
 
