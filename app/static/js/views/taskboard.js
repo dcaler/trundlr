@@ -49,6 +49,10 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
       ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
       : '';
 
+    const descSnippet = t.description
+      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px" title="${escHtml(t.description)}">${escHtml(t.description.length > 24 ? t.description.slice(0, 24) + '…' : t.description)}</div>`
+      : '';
+
     const pinnedBtn = t.status === 'todo'
       ? `<button class="pin-btn btn btn-ghost" data-id="${t.id}" data-pinned="${t.pinned ? '1' : '0'}" title="${t.pinned ? 'Unpin (re-align will reschedule)' : 'Pin (preserve timing through re-align)'}" style="padding:0.1em 0.35em;font-size:0.9em;opacity:${t.pinned ? '1' : '0.35'}">${t.pinned ? '📌' : '📌'}</button>`
       : '';
@@ -59,7 +63,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
           ${statusOpts}
         </select>
       </td>
-      <td><button class="btn btn-ghost open-task-btn" data-id="${t.id}" data-project-id="${t.project_id}" style="padding:0;text-align:left;font-weight:inherit;font-size:inherit">${escHtml(t.title)}</button>${depHtml}</td>
+      <td><button class="btn btn-ghost open-task-btn" data-id="${t.id}" data-project-id="${t.project_id}" style="padding:0;text-align:left;font-weight:inherit;font-size:inherit">${escHtml(t.title)}</button>${descSnippet}${depHtml}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${priorityBadge(priorityByProject[t.project_id])}${escHtml(byProject[t.project_id] || '—')}</td>
       <td style="color:var(--text-muted);font-size:0.9em">${escHtml((t.resource_ids || []).map(id => byResource[id]).filter(Boolean).join(', ') || '—')}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
