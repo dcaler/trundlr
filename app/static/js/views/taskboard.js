@@ -50,7 +50,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
       : '';
 
     const descSnippet = t.description
-      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px" title="${escHtml(t.description)}">${escHtml(t.description.length > 24 ? t.description.slice(0, 24) + '…' : t.description)}</div>`
+      ? ` <span style="font-size:0.78em;color:var(--text-muted)" title="${escHtml(t.description)}">${escHtml(t.description.length > 24 ? t.description.slice(0, 24) + '…' : t.description)}</span>`
       : '';
 
     const pinnedBtn = t.status === 'todo'
