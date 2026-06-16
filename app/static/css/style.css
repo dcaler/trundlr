@@ -228,7 +228,7 @@ input[readonly] {
 .badge-in_progress { background: #cfe2ff; color: #084298; }
 .badge-blocked    { background: #f8d7da; color: #842029; }
 .badge-done       { background: #d1e7dd; color: #0a3622; }
-.badge-failed     { background: #dc3545; color: white; }
+.badge-failed     { background: #f5c6cb; color: #7b1020; }
 
 /* ── Project priority badges ────────────────────────────────────────────── */
 
