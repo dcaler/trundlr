@@ -1,6 +1,6 @@
 // ── Task board view ────────────────────────────────────────────────────────
 
-const STATUS_ORDER = ['todo', 'in_progress', 'blocked', 'done'];
+const STATUS_ORDER = ['todo', 'in_progress', 'blocked', 'done', 'failed'];
 
 function taskSortKey(t) {
   // Scheduled tasks sorted by start_date; unscheduled float to the bottom.

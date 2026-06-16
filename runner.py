@@ -235,8 +235,9 @@ def main() -> None:
             log_dir.mkdir(parents=True, exist_ok=True)
             with open(log_file, "w") as lf:
                 proc = subprocess.Popen(
-                    command,
+                    f"source ~/.bashrc 2>/dev/null; {command}",
                     shell=True,
+                    executable="/bin/bash",
                     cwd=project_dir,
                     stdout=lf,
                     stderr=subprocess.STDOUT,

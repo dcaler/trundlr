@@ -30,7 +30,7 @@ function setActiveNav(hash) {
 }
 
 async function navigate() {
-  const raw = location.hash.slice(1) || '/projects';
+  const raw = location.hash.slice(1) || '/tasks';
   const el = document.getElementById('app');
 
   // Split off any ?query=string  e.g. /tasks?resource=3
@@ -57,7 +57,7 @@ async function navigate() {
   // Highlight the base nav item when on a deep-link sub-path
   setActiveNav(params.id ? path.slice(0, path.lastIndexOf('/')) : path);
 
-  if (!view) view = views['/projects'];
+  if (!view) view = views['/tasks'];
   if (!view) { el.innerHTML = '<p class="error">Page not found.</p>'; return; }
 
   el.innerHTML = '<p class="loading">Loading…</p>';
