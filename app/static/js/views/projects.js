@@ -82,23 +82,23 @@ function setupResourceAutoStart(form, resourceById = {}) {
     const checked = [...form.querySelectorAll('[name="resource_ids"]:checked')];
     if (!checked.length) return;
 
-    // Start no earlier than now; also no earlier than the last task on each checked resource.
-    let bestMs = Date.now();
+    // All datetime strings are naive wall-clock in the configured app timezone.
+    // Compare as strings — ISO format sorts lexicographically correctly.
+    let best = nowIsoStr();
     try {
       const results = await Promise.all(
         checked.map(cb => api.get(`/resources/${cb.value}/next-available`))
       );
       for (const data of results) {
         if (data.next_available) {
-          bestMs = Math.max(bestMs, new Date(data.next_available.replace(' ', 'T')).getTime());
+          const na = data.next_available.replace(' ', 'T');
+          if (na > best) best = na;
         }
       }
-    } catch (_) { /* keep bestMs = now on failure */ }
+    } catch (_) {}
 
-    const best = new Date(bestMs);
-    const p = n => String(n).padStart(2, '0');
-    startDateEl.value = `${best.getUTCFullYear()}-${p(best.getUTCMonth() + 1)}-${p(best.getUTCDate())}`;
-    if (startTimeEl) startTimeEl.value = `${p(best.getUTCHours())}:${p(best.getUTCMinutes())}`;
+    startDateEl.value = best.slice(0, 10);
+    if (startTimeEl) startTimeEl.value = best.slice(11, 16);
     startDateEl.dispatchEvent(new Event('change'));
   }
 
@@ -120,11 +120,10 @@ function setupDependencyAutoStart(form, taskById) {
     if (!dep) return;
     const anchor = dep.end_date || dep.start_date;
     if (anchor) {
-      const anchorMs = Math.max(new Date(anchor.replace(' ', 'T')).getTime(), Date.now());
-      const d = new Date(anchorMs);
-      const p = n => String(n).padStart(2, '0');
-      startDateEl.value = `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}`;
-      if (startTimeEl) startTimeEl.value = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+      const anchorStr = anchor.replace(' ', 'T');
+      const best = anchorStr > nowIsoStr() ? anchorStr : nowIsoStr();
+      startDateEl.value = best.slice(0, 10);
+      if (startTimeEl) startTimeEl.value = best.slice(11, 16);
       startDateEl.dispatchEvent(new Event('change'));
     }
   });
