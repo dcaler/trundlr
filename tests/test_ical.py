@@ -83,7 +83,6 @@ def test_ical_unscheduled_task_excluded(client):
     client.post("/api/tasks/", json={
         "title": "Not Yet Scheduled",
         "project_id": project["id"],
-        "resource_ids": [resource["id"]],
     })
 
     resp = client.get(f"/api/resources/{resource['id']}/calendar.ics")

@@ -133,7 +133,6 @@ def test_unscheduled_task_excluded_from_report(client):
     client.post("/api/tasks/", json={
         "title": "No Time",
         "project_id": project["id"],
-        "resource_ids": [rid],
     })
 
     root = _report(client, rid, _sync_collection_body())
@@ -158,7 +157,7 @@ def test_unscheduled_task_excluded_from_propfind(client):
     rid = resource["id"]
     _make_scheduled_task(client, project["id"], rid, "Has Time")
     client.post("/api/tasks/", json={
-        "title": "No Time", "project_id": project["id"], "resource_ids": [rid],
+        "title": "No Time", "project_id": project["id"],
     })
 
     resp = client.request(

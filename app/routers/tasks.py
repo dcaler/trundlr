@@ -7,8 +7,14 @@ from sqlmodel import Session, select
 
 from app.database import get_db
 from app.models import AppSettings, Project, Resource, Task, TaskResource, TaskStatus
+from app.scheduling import reflow_schedule
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 from app.validation import DBId, OptionalDBIdQuery
+
+
+def _reflow(session: Session) -> None:
+    reflow_schedule(session)
+    session.commit()
 
 
 def _now_naive(session: Session) -> datetime:
@@ -88,6 +94,8 @@ def create_task(data: TaskCreate, session: Session = Depends(get_db)):
     session.flush()
     _set_resources(task.id, data.resource_ids, session)
     session.commit()
+    if data.start_date is None and data.end_date is None:
+        _reflow(session)
     session.refresh(task)
     return _task_read(task, session)
 
@@ -156,6 +164,7 @@ def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     session.flush()  # clear FK references before deleting the task
     session.delete(task)
     session.commit()
+    _reflow(session)
 
 
 @router.post("/{task_id}/copy", response_model=TaskRead, status_code=201)
@@ -188,7 +197,6 @@ def copy_task(task_id: int = DBId(), session: Session = Depends(get_db)):
         command=task.command,
         start_date=new_start,
         end_date=new_end,
-        load=task.load,
         duration=task.duration,
         project_id=task.project_id,
     )
@@ -196,5 +204,6 @@ def copy_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     session.flush()
     _set_resources(new_task.id, orig_resource_ids, session)
     session.commit()
+    _reflow(session)
     session.refresh(new_task)
     return _task_read(new_task, session)
