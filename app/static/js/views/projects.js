@@ -528,6 +528,15 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       const patch = { status: sel.value };
       if (sel.value === 'in_progress') {
         patch.start_date = nowIsoStr();
+        const task = taskById[parseInt(sel.dataset.id)];
+        if (task?.duration) {
+          const endMs = Date.parse(patch.start_date + 'Z') + task.duration * 3600000;
+          const d = new Date(endMs);
+          const p = n => String(n).padStart(2, '0');
+          patch.end_date = `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:00`;
+        } else if (task?.end_date && task.end_date < patch.start_date) {
+          patch.end_date = null;
+        }
       } else if (sel.value === 'done') {
         patch.end_date = nowIsoStr();
         const task = taskById[parseInt(sel.dataset.id)];
