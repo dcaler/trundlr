@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.database import get_db
+from app.email import send_notification
 from app.models import AppSettings, Project, Resource, Task, TaskResource, TaskStatus
 from app.scheduling import reflow_schedule
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
@@ -13,8 +14,30 @@ from app.validation import DBId, OptionalDBIdQuery
 
 
 def _reflow(session: Session) -> None:
-    reflow_schedule(session)
+    result = reflow_schedule(session)
     session.commit()
+    if result.get("unscheduled"):
+        items = result["unscheduled"]
+        lines = "\n".join(f"  • {t['title']}: {t['reason']}" for t in items)
+        send_notification(session, "Tasks could not be scheduled",
+                          f"{len(items)} task(s) could not be scheduled:\n{lines}")
+
+
+def _notify_status(session: Session, task: Task) -> None:
+    if task.status not in (TaskStatus.done, TaskStatus.failed):
+        return
+    proj = session.get(Project, task.project_id)
+    proj_name = proj.name if proj else f"project {task.project_id}"
+    status_str = task.status.value.upper()
+    lines = [f"Task: {task.title}", f"Project: {proj_name}", f"Status: {status_str}"]
+    if task.duration is not None:
+        lines.append(f"Duration: {task.duration:.2f}h")
+    if task.exit_code is not None:
+        lines.append(f"Exit code: {task.exit_code}")
+    if task.log_tail:
+        snippet = "\n".join(task.log_tail.splitlines()[-10:])
+        lines.append(f"\nLog (last 10 lines):\n{snippet}")
+    send_notification(session, f"{status_str}: {task.title}", "\n".join(lines))
 
 
 def _now_naive(session: Session) -> datetime:
@@ -140,6 +163,8 @@ def update_task(
 
     session.add(task)
     session.commit()
+    if "status" in updates:
+        _notify_status(session, task)
     session.refresh(task)
     return _task_read(task, session)
 
@@ -164,6 +189,11 @@ def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     session.flush()  # clear FK references before deleting the task
     session.delete(task)
     session.commit()
+    if dependents:
+        titles = ", ".join(d.title for d in dependents)
+        send_notification(session, "Tasks blocked — dependency deleted",
+                          f"'{task.title}' was deleted.\n\nThe following tasks are now blocked:\n"
+                          + "\n".join(f"  • {d.title}" for d in dependents))
     _reflow(session)
 
 

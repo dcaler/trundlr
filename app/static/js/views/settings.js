@@ -67,6 +67,56 @@ registerView('/settings', async (el) => {
 
     <hr style="margin:2rem 0;border:none;border-top:1px solid var(--border)">
 
+    <h2>Email notifications</h2>
+    <p style="color:var(--text-muted);max-width:480px;margin-bottom:1rem;font-size:0.9em">
+      Sends a plain-text email when a task completes, fails, or a dependency is deleted.
+      Leave SMTP host blank to disable.
+    </p>
+    <form id="email-form" style="display:flex;flex-direction:column;gap:0.75rem;max-width:360px">
+      <div>
+        <label style="display:block;margin-bottom:0.25rem">Recipient email</label>
+        <input name="notify_email" type="email" value="${escHtml(settings.notify_email || '')}" placeholder="you@example.com" style="width:100%">
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:0.25rem">SMTP host</label>
+        <input name="smtp_host" value="${escHtml(settings.smtp_host || '')}" placeholder="smtp.gmail.com" style="width:100%">
+      </div>
+      <div style="display:flex;gap:0.5rem">
+        <div style="flex:1">
+          <label style="display:block;margin-bottom:0.25rem">Port</label>
+          <input name="smtp_port" type="number" value="${settings.smtp_port || 587}" style="width:100%">
+        </div>
+        <div style="flex:1;display:flex;align-items:flex-end;padding-bottom:0.35rem">
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9em">
+            <input type="checkbox" name="smtp_tls" ${settings.smtp_tls !== false ? 'checked' : ''}>
+            STARTTLS
+          </label>
+        </div>
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:0.25rem">SMTP username</label>
+        <input name="smtp_user" value="${escHtml(settings.smtp_user || '')}" placeholder="user@gmail.com" style="width:100%">
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:0.25rem">
+          SMTP password
+          ${settings.smtp_password_set ? '<span style="font-size:0.8em;color:var(--text-muted)">(set — leave blank to keep)</span>' : ''}
+        </label>
+        <input name="smtp_password" type="password" placeholder="${settings.smtp_password_set ? '••••••••' : ''}" style="width:100%" autocomplete="new-password">
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:0.25rem">From address <span style="font-size:0.8em;color:var(--text-muted)">(optional)</span></label>
+        <input name="smtp_from" type="email" value="${escHtml(settings.smtp_from || '')}" placeholder="trundlr@yourdomain.com" style="width:100%">
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center">
+        <button type="submit" class="btn btn-primary">Save email settings</button>
+        <button type="button" id="btn-test-email" class="btn btn-ghost">Send test</button>
+        <span id="email-status" style="font-size:0.9em;color:var(--text-muted)"></span>
+      </div>
+    </form>
+
+    <hr style="margin:2rem 0;border:none;border-top:1px solid var(--border)">
+
     <h1>Task cycles</h1>
     <p style="color:var(--text-muted);max-width:640px">
       A cycle is a reusable bundle of tasks (e.g. a "Lit Review": Init → Gather → Collect → Draft → Review).
@@ -90,6 +140,47 @@ registerView('/settings', async (el) => {
       setTimeout(() => { statusEl.textContent = ''; }, 2000);
     } catch (err) {
       alert(`Error: ${err.message}`);
+    }
+  });
+
+  el.querySelector('#email-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const statusEl = el.querySelector('#email-status');
+    const patch = {
+      notify_email: fd.get('notify_email') || null,
+      smtp_host:    fd.get('smtp_host') || null,
+      smtp_port:    parseInt(fd.get('smtp_port')) || 587,
+      smtp_user:    fd.get('smtp_user') || null,
+      smtp_from:    fd.get('smtp_from') || null,
+      smtp_tls:     fd.has('smtp_tls'),
+    };
+    const pw = fd.get('smtp_password');
+    if (pw) patch.smtp_password = pw;
+    try {
+      await api.patch('/settings/', patch);
+      statusEl.textContent = 'Saved.';
+      setTimeout(() => { statusEl.textContent = ''; }, 2000);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  });
+
+  el.querySelector('#btn-test-email').addEventListener('click', async () => {
+    const btn = el.querySelector('#btn-test-email');
+    const statusEl = el.querySelector('#email-status');
+    btn.disabled = true;
+    statusEl.textContent = 'Sending…';
+    try {
+      await api.post('/settings/test-email', {});
+      statusEl.style.color = 'var(--success, green)';
+      statusEl.textContent = 'Sent! Check your inbox.';
+    } catch (err) {
+      statusEl.style.color = 'var(--danger, red)';
+      statusEl.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
     }
   });
 

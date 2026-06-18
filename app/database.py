@@ -213,6 +213,18 @@ def apply_migrations(engine):
         if "caldav_default_project_id" not in appsettings_cols:
             conn.execute(text("ALTER TABLE appsettings ADD COLUMN caldav_default_project_id INTEGER REFERENCES project(id)"))
             conn.commit()
+        for col, ddl in [
+            ("notify_email",  "TEXT"),
+            ("smtp_host",     "TEXT"),
+            ("smtp_port",     "INTEGER NOT NULL DEFAULT 587"),
+            ("smtp_user",     "TEXT"),
+            ("smtp_password", "TEXT"),
+            ("smtp_from",     "TEXT"),
+            ("smtp_tls",      "INTEGER NOT NULL DEFAULT 1"),
+        ]:
+            if col not in appsettings_cols:
+                conn.execute(text(f"ALTER TABLE appsettings ADD COLUMN {col} {ddl}"))
+        conn.commit()
 
         result = conn.execute(text("PRAGMA table_info(project)"))
         project_cols2 = {row[1] for row in result}

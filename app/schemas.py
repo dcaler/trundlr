@@ -312,17 +312,33 @@ class CycleInstantiate(BaseModel):
 class SettingsRead(BaseModel):
     timezone: str
     caldav_default_project_id: Optional[int] = None
+    notify_email: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: int = 587
+    smtp_user: Optional[str] = None
+    smtp_from: Optional[str] = None
+    smtp_tls: bool = True
+    smtp_password_set: bool = False  # never return the actual password
 
     model_config = {"from_attributes": True}
 
 
 class SettingsUpdate(BaseModel):
-    timezone: str
+    timezone: Optional[str] = None
     caldav_default_project_id: Optional[int] = None
+    notify_email: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from: Optional[str] = None
+    smtp_tls: Optional[bool] = None
 
     @field_validator("timezone")
     @classmethod
-    def valid_tz(cls, v: str) -> str:
+    def valid_tz(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
         try:
             ZoneInfo(v)
         except (ZoneInfoNotFoundError, KeyError):

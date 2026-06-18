@@ -50,6 +50,14 @@ class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     timezone: str = Field(default="UTC")
     caldav_default_project_id: Optional[int] = Field(default=None, foreign_key="project.id")
+    # Email notifications
+    notify_email: Optional[str] = Field(default=None)
+    smtp_host: Optional[str] = Field(default=None)
+    smtp_port: int = Field(default=587)
+    smtp_user: Optional[str] = Field(default=None)
+    smtp_password: Optional[str] = Field(default=None)
+    smtp_from: Optional[str] = Field(default=None)
+    smtp_tls: bool = Field(default=True)
 
 
 class Task(SQLModel, table=True):
