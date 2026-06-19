@@ -389,6 +389,22 @@ def _intersect(a: list[Interval], b: list[Interval]) -> list[Interval]:
     return out
 
 
+def _merge_adjacent(ivs: list[Interval]) -> list[Interval]:
+    """Merge overlapping or nearly-adjacent intervals (gap ≤ 1 min).
+    The 1-minute tolerance bridges the 23:59→00:00 day boundary so that
+    resources available 00:00–23:59 every day are treated as continuous."""
+    if not ivs:
+        return []
+    out = [ivs[0]]
+    _GAP = timedelta(minutes=1)
+    for s, e in ivs[1:]:
+        if s <= out[-1][1] + _GAP:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
 def _earliest_slot(
     resources: list[Resource],
     earliest: datetime,
@@ -397,29 +413,37 @@ def _earliest_slot(
     windows_by_res: dict[int, list[ResourceWindow]],
     blockouts_by_res: dict[int, list[ResourceBlockout]],
 ) -> Optional[datetime]:
-    """Earliest start ≥ `earliest` where a `dur`-long block fits, contiguously
-    (no day-boundary split), on EVERY listed resource at once. None if no slot
-    exists within SCHED_HORIZON_DAYS."""
+    """Earliest start ≥ `earliest` where a `dur`-long block fits on EVERY listed
+    resource at once. Adjacent daily windows (≤ 1 min gap) are merged so that
+    24/7 resources (00:00–23:59) are treated as continuous across midnight.
+    Returns None if no slot exists within SCHED_HORIZON_DAYS."""
     if not resources:
         return None
     start_day = earliest.date()
-    for off in range(SCHED_HORIZON_DAYS + 1):
-        day = start_day + timedelta(days=off)
-        free: Optional[list[Interval]] = None
-        for r in resources:
+
+    # Build per-resource continuous free-time lists across the full horizon,
+    # then intersect. Merging adjacent daily intervals lets tasks span midnight
+    # on resources that are available around the clock.
+    resource_free: list[list[Interval]] = []
+    for r in resources:
+        ivs: list[Interval] = []
+        for off in range(SCHED_HORIZON_DAYS + 2):
+            day = start_day + timedelta(days=off)
             avail = _available_intervals_on_day(
                 r, day, windows_by_res.get(r.id), blockouts_by_res.get(r.id)
             )
-            avail = _subtract_busy(avail, busy.get(r.id, []))
-            free = avail if free is None else _intersect(free, avail)
-            if not free:
-                break
-        if not free:
-            continue
-        for s, e in sorted(free):
-            cand = max(s, earliest)
-            if cand + dur <= e:
-                return cand
+            ivs.extend(_subtract_busy(avail, busy.get(r.id, [])))
+        resource_free.append(_merge_adjacent(sorted(ivs)))
+
+    combined = resource_free[0]
+    for other in resource_free[1:]:
+        combined = _intersect(combined, other)
+
+    for s, e in combined:
+        cand = max(s, earliest)
+        if cand + dur <= e:
+            return cand
+
     return None
 
 
