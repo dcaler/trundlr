@@ -432,7 +432,14 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
         </table>`}
   `;
 
-  if (scrollY !== null) requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'instant' }));
+  if (scrollY !== null) {
+    requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'instant' }));
+  } else if (editingTaskId !== null) {
+    requestAnimationFrame(() => {
+      const row = el.querySelector(`.edit-row[data-id="${editingTaskId}"]`);
+      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
 
   el.querySelector('.back-btn').addEventListener('click', () => showProjectsList(el));
 
