@@ -315,6 +315,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       return `<tr class="edit-row" data-id="${t.id}">
         <td colspan="9">
           <form class="form-row edit-task-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
+            <div><label>ID</label><input value="${t.id}" readonly style="width:60px;color:var(--text-muted)"></div>
             <div><label>Title</label><input name="title" value="${escHtml(t.title)}" required style="width:160px"></div>
             <div><label>Description</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description"></div>
             <div><label>Command</label><input name="command" value="${escHtml(t.command || '')}" style="width:280px;font-family:monospace" placeholder="shell command (cpu/gpu tasks)"></div>
