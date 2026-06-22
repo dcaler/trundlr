@@ -1,22 +1,7 @@
 import { run } from 'uebersicht';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// trundlr status widget for Übersicht (macOS desktop overlay)
-// https://tracesof.net/uebersicht/
-//
-// Setup:
-//   1. Install Übersicht from https://tracesof.net/uebersicht/
-//   2. Copy this file into your Übersicht widgets folder
-//      (Übersicht menu → Open widgets folder)
-//   3. Set API below to your trundlr instance URL
-//   4. The widget refreshes every 2 minutes automatically
-//
-// The widget shows your trundlr projects grouped by priority, with the current
-// or last-completed task and the next scheduled task per project.
-// Project names and task bullets are clickable and open trundlr in your browser.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const API = 'http://YOUR_TRUNDLR_HOST:8251';
+// Set your Trundlr URL here:
+const API = 'http://100.87.86.57:8251';
 
 export const command = `curl -sf '${API}/api/projects/' -o /tmp/trundlr_p.json \
   && curl -sf '${API}/api/tasks/' -o /tmp/trundlr_t.json \
@@ -26,14 +11,20 @@ export const command = `curl -sf '${API}/api/projects/' -o /tmp/trundlr_p.json \
 
 export const refreshFrequency = 120000; // 2 minutes
 
+// 🎯 🥇 🥈 🥉 🐌 💤 🛌
+
 export const className = `
-  top: 1%;
-  left: 1%;
+  top: 10px;
+  left: 10px;
   width: 320px;
   box-sizing: border-box;
   margin: auto;
   padding: 0px 10px 10px;
   background-color: rgba(0, 0, 0, 0.15);
+  background-image: url('logo.png');
+  background-repeat: no-repeat;
+  background-size: 176px 84px;
+  background-position: 50% 20px;
   -webkit-backdrop-filter: blur(20px);
   font-family: Helvetica Neue;
   font-weight: 300;
@@ -62,10 +53,10 @@ export const className = `
 `;
 
 const PRIORITY_LABELS = {
-  1: { badge: 'P1', label: 'Code Fixes',    bg: '#dc3545', color: 'white' },
-  2: { badge: 'P2', label: 'Top Priority',  bg: '#fd7e14', color: 'white' },
-  3: { badge: 'P3', label: 'Back-burner',   bg: '#ffc107', color: '#333'  },
-  4: { badge: 'P4', label: 'Slow Progress', bg: '#adb5bd', color: '#333'  },
+  1: { badge: 'P1', label: 'On Fire',      bg: '#dc3545', color: 'white' },
+  2: { badge: 'P2', label: 'Front Burner', bg: '#fd7e14', color: 'white' },
+  3: { badge: 'P3', label: 'Back Burner',  bg: '#ffc107', color: '#333'  },
+  4: { badge: 'P4', label: 'Crock Pot',    bg: '#adb5bd', color: '#333'  },
 };
 
 const PriBadge = ({ pri }) => {
@@ -100,6 +91,13 @@ export const render = ({ output }) => {
     (byProject[t.project_id] = byProject[t.project_id] || []).push(t);
   }
 
+  // Compute latest end_date across all tasks per project
+  const projectEnd = {};
+  for (const t of tasks) {
+    if (t.end_date && (!projectEnd[t.project_id] || t.end_date > projectEnd[t.project_id]))
+      projectEnd[t.project_id] = t.end_date;
+  }
+
   // Build enriched project list, drop fully-complete/empty ones
   const active = projects.map(p => {
     const pt = byProject[p.id] || [];
@@ -119,14 +117,16 @@ export const render = ({ output }) => {
     return { p, running, lastDone, next };
   }).filter(Boolean);
 
+  // Sleeping: not archived, but no running or next task
+  const activeIds = new Set(active.map(a => a.p.id));
+  const sleeping = projects.filter(p => !p.archived && !activeIds.has(p.id));
+
   // Group by priority
   const byPriority = {};
   for (const item of active) {
     const pri = item.p.priority || 4;
     (byPriority[pri] = byPriority[pri] || []).push(item);
   }
-
-  const taskLink = { cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(204,238,255,0.4)' };
 
   const blocks = [1, 2, 3, 4].filter(pri => byPriority[pri]).map(pri => (
     <span key={pri}>
@@ -135,27 +135,22 @@ export const render = ({ output }) => {
         {byPriority[pri].map(({ p, running, lastDone, next }) => {
           const statusTask = running || lastDone;
           const subItems = [];
+          const taskLink = {cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(204,238,255,0.4)'};
           if (statusTask) {
             const prefix = statusTask.status === 'in_progress' ? '▶' : '✓';
-            subItems.push(
-              <li key="s">
-                <span onClick={() => run(`open '${API}/#/tasks/${statusTask.id}'`)} style={taskLink}>{prefix} {statusTask.title}</span>
-              </li>
-            );
+            subItems.push(<li key="s"><span onClick={() => run(`open '${API}/#/tasks/${statusTask.id}'`)} style={taskLink}>{prefix} {statusTask.title}</span></li>);
           }
           if (next) {
-            const eta = next.end_date   ? ` — ${fmtDate(next.end_date)}`
-                      : next.start_date ? ` — ${fmtDate(next.start_date)}`
+            const eta = next.end_date   ? `: ${fmtDate(next.end_date)}`
+                      : next.start_date ? `: ${fmtDate(next.start_date)}`
                       :                   '';
-            subItems.push(
-              <li key="n">
-                <span onClick={() => run(`open '${API}/#/tasks/${next.id}'`)} style={taskLink}>→ {next.title}{eta}</span>
-              </li>
-            );
+            subItems.push(<li key="n"><span onClick={() => run(`open '${API}/#/tasks/${next.id}'`)} style={taskLink}>→ {next.title}{eta}</span></li>);
           }
           return (
             <li key={p.id} style={{marginBottom: '5px'}}>
-              <span onClick={() => run(`open '${API}/#/projects/${p.id}'`)} style={taskLink}>{p.name}</span>
+              <span onClick={() => run(`open '${API}/#/projects/${p.id}'`)} style={{cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(204,238,255,0.4)'}}>
+                {projectEnd[p.id] ? <span style={{opacity: 0.55, fontStyle: 'italic', marginRight: '4px'}}>(Ends {fmtDate(projectEnd[p.id])})</span> : null}{p.name}
+              </span>
               {subItems.length ? <ul>{subItems}</ul> : null}
             </li>
           );
@@ -167,10 +162,26 @@ export const render = ({ output }) => {
   return (
     <div>
       <p>
+ 
         {blocks.length
           ? blocks
           : <span style={{color: 'rgba(204,238,255,0.35)', fontSize: '12px'}}>⟳ connecting to trundlr…</span>
         }
+
+        {sleeping.length > 0 && (
+          <span>
+            <em>🛌 Sleeping</em>
+            <ul>
+              {sleeping.map(p => (
+                <li key={p.id} style={{marginBottom: '3px'}}>
+                  <span onClick={() => run(`open '${API}/#/projects/${p.id}'`)} style={{cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(204,238,255,0.4)'}}>
+                    {projectEnd[p.id] ? <span style={{opacity: 0.55, fontStyle: 'italic', marginRight: '4px'}}>(Ends {fmtDate(projectEnd[p.id])})</span> : null}{p.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </span>
+        )}
       </p>
     </div>
   );
