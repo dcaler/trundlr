@@ -364,7 +364,8 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       <td style="font-size:0.8rem">${t.dependency_broken
         ? `<span style="color:var(--danger)" title="This task's dependency was deleted — set a new one.">⚠ deleted — update</span>`
         : t.depends_on_id && taskById[t.depends_on_id]
-        ? `<span style="color:var(--text-muted)">↳ ${escHtml(taskById[t.depends_on_id].title)}</span>`
+        ? (() => { const dep = taskById[t.depends_on_id]; const met = dep.status === 'done';
+            return `<span style="color:var(--text-muted)"><span style="color:${met ? 'var(--success,#4caf50)' : 'var(--danger)'}" title="${met ? 'Dependency met' : 'Dependency not yet done'}">${met ? '✓' : '✗'}</span> ${escHtml(dep.title)}</span>`; })()
         : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
