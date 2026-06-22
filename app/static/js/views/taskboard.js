@@ -46,7 +46,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
     const depHtml = t.dependency_broken
       ? `<div style="font-size:0.78em;color:var(--danger);margin-top:1px" title="This task's dependency was deleted — set a new one.">⚠ dependency deleted — update it</div>`
       : dep
-      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px">↳ ${escHtml(dep.title)}</div>`
+      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px"><span style="color:${dep.status === 'done' ? 'var(--success,#4caf50)' : 'var(--danger)'}" title="${dep.status === 'done' ? 'Dependency met' : 'Dependency not yet done'}">${dep.status === 'done' ? '✓' : '✗'}</span> ${escHtml(dep.title)}</div>`
       : '';
 
     const descSnippet = t.description
