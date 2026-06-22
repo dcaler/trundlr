@@ -17,10 +17,11 @@ def _reflow(session: Session) -> None:
     result = reflow_schedule(session)
     session.commit()
     if result.get("unscheduled"):
-        items = result["unscheduled"]
-        lines = "\n".join(f"  • {t['title']}: {t['reason']}" for t in items)
-        send_notification(session, "Tasks could not be scheduled",
-                          f"{len(items)} task(s) could not be scheduled:\n{lines}")
+        items = [t for t in result["unscheduled"] if t.get("reason") != "blocked by an unscheduled dependency"]
+        if items:
+            lines = "\n".join(f"  • {t['title']}: {t['reason']}" for t in items)
+            send_notification(session, "Tasks could not be scheduled",
+                              f"{len(items)} task(s) could not be scheduled:\n{lines}")
 
 
 def _notify_status(session: Session, task: Task) -> None:
