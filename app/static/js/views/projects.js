@@ -397,6 +397,12 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       <span style="font-size:0.85em;color:var(--text-muted)">Creates a numbered, chained batch of tasks.</span>
     </form>` : ''}
 
+    <div style="margin-top:1.5rem;display:flex;gap:0.5rem;align-items:center">
+      <button id="quick-bug-btn" class="btn btn-ghost">+ Bug Fix</button>
+      <button id="quick-feature-btn" class="btn btn-ghost">+ Add Feature</button>
+      <span style="font-size:0.85em;color:var(--text-muted)">Creates a 1h task and opens it for editing.</span>
+    </div>
+
     <h2 style="margin-top:1.5rem;margin-bottom:0.75rem">Add task</h2>
     <form id="add-task-form" class="form-row" style="margin-bottom:1.5rem;flex-wrap:wrap">
       <div><label>Title *</label><input name="title" required placeholder="Task title" style="width:180px"></div>
@@ -455,6 +461,15 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   }
+
+  const quickAdd = async (title) => {
+    try {
+      const task = await api.post('/tasks/', { title, project_id: projectId, duration: 1, status: 'todo' });
+      await showProjectDetail(el, projectId, task.id);
+    } catch (err) { alert(`Error: ${err.message}`); }
+  };
+  el.querySelector('#quick-bug-btn')?.addEventListener('click', () => quickAdd('Bug Fix'));
+  el.querySelector('#quick-feature-btn')?.addEventListener('click', () => quickAdd('Add Feature'));
 
   const addForm = el.querySelector('#add-task-form');
   setupAutoCalcEnd(addForm);
