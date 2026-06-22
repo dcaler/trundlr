@@ -131,7 +131,13 @@ function setupDependencyAutoStart(form, taskById) {
 
 async function showProjectsList(el, editingId = null) {
   el.innerHTML = '<p class="loading">Loading…</p>';
-  const projects = await api.get('/projects/');
+  const [projects, allTasks] = await Promise.all([api.get('/projects/'), api.get('/tasks/')]);
+
+  const projectEnd = {};
+  for (const t of allTasks) {
+    if (t.end_date && (!projectEnd[t.project_id] || t.end_date > projectEnd[t.project_id]))
+      projectEnd[t.project_id] = t.end_date;
+  }
 
   const rows = projects.map(p => {
     if (p.id === editingId) {
@@ -150,8 +156,9 @@ async function showProjectsList(el, editingId = null) {
         </td>
       </tr>`;
     }
+    const endStr = projectEnd[p.id] ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">ends ${fmtDt(projectEnd[p.id])}</div>` : '';
     return `<tr>
-      <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${priorityBadge(p.priority)}${escHtml(p.name)}</button></td>
+      <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${priorityBadge(p.priority)}${escHtml(p.name)}</button>${endStr}</td>
       <td style="color:var(--text-muted)">${escHtml(p.description || '—')}</td>
       <td style="white-space:nowrap;text-align:right">
         <button class="btn btn-ghost edit-project-btn" data-id="${p.id}" title="Edit">✎</button>
