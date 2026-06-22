@@ -156,7 +156,7 @@ async function showProjectsList(el, editingId = null) {
         </td>
       </tr>`;
     }
-    const endStr = projectEnd[p.id] ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">ends ${fmtDt(projectEnd[p.id])}</div>` : '';
+    const endStr = projectEnd[p.id] ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">ends ${projectEnd[p.id].slice(0, 10)}</div>` : '';
     return `<tr>
       <td><button class="btn btn-ghost view-btn" data-id="${p.id}" style="font-weight:600;padding:0;text-align:left">${priorityBadge(p.priority)}${escHtml(p.name)}</button>${endStr}</td>
       <td style="color:var(--text-muted)">${escHtml(p.description || '—')}</td>
