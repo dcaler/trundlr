@@ -149,7 +149,7 @@ export const render = ({ output }) => {
           return (
             <li key={p.id} style={{marginBottom: '5px'}}>
               <span onClick={() => run(`open '${API}/#/projects/${p.id}'`)} style={{cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(204,238,255,0.4)'}}>
-                {projectEnd[p.id] ? <span style={{opacity: 0.55, fontStyle: 'italic', marginRight: '4px'}}>(Ends {fmtDate(projectEnd[p.id])})</span> : null}{p.name}
+                {projectEnd[p.id] ? <span style={{opacity: 0.55, fontStyle: 'italic', marginRight: '4px'}}>({fmtDate(projectEnd[p.id])})</span> : null}{p.name}
               </span>
               {subItems.length ? <ul>{subItems}</ul> : null}
             </li>
@@ -175,7 +175,7 @@ export const render = ({ output }) => {
               {sleeping.map(p => (
                 <li key={p.id} style={{marginBottom: '3px'}}>
                   <span onClick={() => run(`open '${API}/#/projects/${p.id}'`)} style={{cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(204,238,255,0.4)'}}>
-                    {projectEnd[p.id] ? <span style={{opacity: 0.55, fontStyle: 'italic', marginRight: '4px'}}>(Ends {fmtDate(projectEnd[p.id])})</span> : null}{p.name}
+                    {projectEnd[p.id] ? <span style={{opacity: 0.55, fontStyle: 'italic', marginRight: '4px'}}>({fmtDate(projectEnd[p.id])})</span> : null}{p.name}
                   </span>
                 </li>
               ))}
