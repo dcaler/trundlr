@@ -7,7 +7,7 @@ function taskSortKey(t) {
   return t.start_date ? new Date(t.start_date).getTime() : Infinity;
 }
 
-async function showTaskBoard(el, showCompleted = false, resourceFilter = null, showDepSolved = false) {
+async function showTaskBoard(el, showCompleted = false, resourceFilter = null, hideDepUnmet = false) {
   el.innerHTML = '<p class="loading">Loading…</p>';
 
   const [tasks, projects, resources] = await Promise.all([
@@ -27,7 +27,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
     : tasks;
   const visible = scoped
     .filter(t => showCompleted || t.status !== 'done')
-    .filter(t => showDepSolved || !(t.depends_on_id && taskById[t.depends_on_id]?.status === 'done'));
+    .filter(t => !hideDepUnmet || !(t.depends_on_id && taskById[t.depends_on_id]?.status !== 'done'));
   // in_progress/paused float to top; blocked sink to bottom; rest sort by schedule.
   visible.sort((a, b) => {
     const rank = s => s === 'in_progress' || s === 'paused' ? -1 : s === 'blocked' ? 1 : 0;
@@ -75,7 +75,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
   }).join('');
 
   const showDoneChecked     = showCompleted  ? 'checked' : '';
-  const showDepSolvedChecked = showDepSolved ? 'checked' : '';
+  const hideDepUnmetChecked = hideDepUnmet ? 'checked' : '';
   const totalCount = scoped.length;
   const doneCount  = scoped.filter(t => t.status === 'done').length;
 
@@ -96,7 +96,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
         </select>
       </label>
       <label style="font-size:0.9em;margin-left:auto">
-        <input type="checkbox" id="show-dep-solved" ${showDepSolvedChecked}> Show dependency met
+        <input type="checkbox" id="hide-dep-unmet" ${hideDepUnmetChecked}> Hide dependency unmet
       </label>
       <label style="font-size:0.9em">
         <input type="checkbox" id="show-done" ${showDoneChecked}> Show completed
@@ -119,15 +119,15 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
         </table>`}
   `;
 
-  el.querySelector('#show-dep-solved')?.addEventListener('change', e => {
+  el.querySelector('#hide-dep-unmet')?.addEventListener('change', e => {
     showTaskBoard(el, showCompleted, resourceFilter, e.target.checked);
   });
   el.querySelector('#show-done')?.addEventListener('change', e => {
-    showTaskBoard(el, e.target.checked, resourceFilter, showDepSolved);
+    showTaskBoard(el, e.target.checked, resourceFilter, hideDepUnmet);
   });
 
   el.querySelector('#filter-resource')?.addEventListener('change', e => {
-    showTaskBoard(el, showCompleted, parseInt(e.target.value) || null, showDepSolved);
+    showTaskBoard(el, showCompleted, parseInt(e.target.value) || null, hideDepUnmet);
   });
 
   el.querySelector('#btn-reflow')?.addEventListener('click', async () => {
@@ -143,7 +143,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
         btn.textContent = '↺ Re-flow';
       } else {
         if (hasUnscheduled) alert(reflowSummary(result));
-        await showTaskBoard(el, showCompleted, resourceFilter, showDepSolved);
+        await showTaskBoard(el, showCompleted, resourceFilter, hideDepUnmet);
       }
     } catch (err) {
       alert(`Re-flow failed: ${err.message}`);
@@ -193,7 +193,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
       }
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, patch);
-        await showTaskBoard(el, showCompleted, resourceFilter, showDepSolved);
+        await showTaskBoard(el, showCompleted, resourceFilter, hideDepUnmet);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
@@ -203,7 +203,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
       try {
         const nowPinned = btn.dataset.pinned === '1';
         await api.patch(`/tasks/${btn.dataset.id}`, { pinned: !nowPinned });
-        await showTaskBoard(el, showCompleted, resourceFilter, showDepSolved);
+        await showTaskBoard(el, showCompleted, resourceFilter, hideDepUnmet);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
