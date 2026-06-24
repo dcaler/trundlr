@@ -481,7 +481,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     const orig = btn.textContent;
     btn.textContent = '…';
     try {
-      const task = await api.post('/tasks/', { title: nextTitle(base), project_id: projectId, duration: 1, status: 'todo' });
+      const task = await api.post('/tasks/?skip_reflow=true', { title: nextTitle(base), project_id: projectId, duration: 1, status: 'todo' });
       await showProjectDetail(el, projectId, task.id);
     } catch (err) { alert(`Error: ${err.message}`); btn.disabled = false; btn.textContent = orig; }
   };

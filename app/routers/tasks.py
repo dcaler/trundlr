@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.database import get_db
@@ -104,7 +104,7 @@ def list_tasks(
 
 
 @router.post("/", response_model=TaskRead, status_code=201)
-def create_task(data: TaskCreate, session: Session = Depends(get_db)):
+def create_task(data: TaskCreate, session: Session = Depends(get_db), skip_reflow: bool = Query(False)):
     if not session.get(Project, data.project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     for rid in data.resource_ids:
@@ -118,7 +118,7 @@ def create_task(data: TaskCreate, session: Session = Depends(get_db)):
     session.flush()
     _set_resources(task.id, data.resource_ids, session)
     session.commit()
-    if data.start_date is None and data.end_date is None:
+    if not skip_reflow and data.start_date is None and data.end_date is None:
         _reflow(session)
     session.refresh(task)
     return _task_read(task, session)
