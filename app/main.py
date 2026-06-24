@@ -98,7 +98,10 @@ def _versioned_index() -> str:
 
 @app.get("/", include_in_schema=False)
 def read_root():
-    return HTMLResponse(_versioned_index())
+    return HTMLResponse(
+        _versioned_index(),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/health")
