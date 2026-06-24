@@ -15,6 +15,7 @@ class ResourceKind(str, Enum):
 class TaskStatus(str, Enum):
     todo = "todo"
     in_progress = "in_progress"
+    paused = "paused"
     blocked = "blocked"
     done = "done"
     failed = "failed"

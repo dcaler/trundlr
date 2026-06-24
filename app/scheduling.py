@@ -489,7 +489,7 @@ def reflow_schedule(session: Session) -> dict:
     # resolution for those same tasks.
     busy: dict[int, list[Interval]] = {rid: [] for rid in resources}
     end_of: dict[int, datetime] = {}
-    FIXED = {TaskStatus.in_progress, TaskStatus.done, TaskStatus.failed}
+    FIXED = {TaskStatus.in_progress, TaskStatus.paused, TaskStatus.done, TaskStatus.failed}
     for t in tasks:
         if not (t.start_date and t.end_date):
             continue

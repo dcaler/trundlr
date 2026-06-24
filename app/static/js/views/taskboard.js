@@ -1,6 +1,6 @@
 // ── Task board view ────────────────────────────────────────────────────────
 
-const STATUS_ORDER = ['todo', 'in_progress', 'blocked', 'done', 'failed'];
+const STATUS_ORDER = ['todo', 'in_progress', 'paused', 'blocked', 'done', 'failed'];
 
 function taskSortKey(t) {
   // Scheduled tasks sorted by start_date; unscheduled float to the bottom.
@@ -28,11 +28,10 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
   const visible = scoped
     .filter(t => showCompleted || t.status !== 'done')
     .filter(t => showDepSolved || !(t.depends_on_id && taskById[t.depends_on_id]?.status === 'done'));
-  // Blocked tasks always go to the bottom; within groups sort by start_date then priority.
+  // in_progress/paused float to top; blocked sink to bottom; rest sort by schedule.
   visible.sort((a, b) => {
-    const aBlocked = a.status === 'blocked' ? 1 : 0;
-    const bBlocked = b.status === 'blocked' ? 1 : 0;
-    if (aBlocked !== bBlocked) return aBlocked - bBlocked;
+    const rank = s => s === 'in_progress' || s === 'paused' ? -1 : s === 'blocked' ? 1 : 0;
+    if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
     return taskSortKey(a) - taskSortKey(b) ||
       (priorityByProject[a.project_id] || 3) - (priorityByProject[b.project_id] || 3);
   });
@@ -162,9 +161,9 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
   el.querySelectorAll('.status-sel').forEach(sel => {
     sel.addEventListener('change', async () => {
       const patch = { status: sel.value };
+      const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
       if (sel.value === 'in_progress') {
         patch.start_date = nowIsoStr();
-        const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
         if (task?.duration) {
           const endMs = Date.parse(patch.start_date + 'Z') + task.duration * 3600000;
           const d = new Date(endMs);
@@ -173,15 +172,23 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, s
         } else if (task?.end_date && task.end_date < patch.start_date) {
           patch.end_date = null;
         }
+      } else if (sel.value === 'paused') {
+        // Accumulate elapsed time into duration, then clear start_date so the
+        // clock stops. Resuming (→ in_progress) sets a fresh start_date.
+        if (task?.start_date) {
+          const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
+          const elapsedH = (Date.now() - startMs) / 3600000;
+          patch.duration = Math.round(((task.duration || 0) + elapsedH) * 100) / 100;
+        }
+        patch.start_date = null;
       } else if (sel.value === 'done') {
         patch.end_date = nowIsoStr();
-        const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
         if (task?.start_date) {
           // Both are naive wall-clock strings in the same (configured) zone;
           // parse both as UTC so the tz offset cancels and we get real elapsed hours.
           const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
-          const durH = (Date.parse(patch.end_date + 'Z') - startMs) / 3600000;
-          if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
+          const elapsedH = (Date.parse(patch.end_date + 'Z') - startMs) / 3600000;
+          patch.duration = Math.round(((task.duration || 0) + elapsedH) * 100) / 100;
         }
       }
       try {

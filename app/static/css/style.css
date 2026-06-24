@@ -226,6 +226,7 @@ input[readonly] {
 
 .badge-todo       { background: #e9ecef; color: #495057; }
 .badge-in_progress { background: #cfe2ff; color: #084298; }
+.badge-paused     { background: #fff3cd; color: #664d03; }
 .badge-blocked    { background: #f8d7da; color: #842029; }
 .badge-done       { background: #d1e7dd; color: #0a3622; }
 .badge-failed     { background: #f5c6cb; color: #7b1020; }
@@ -417,6 +418,7 @@ input[readonly] {
 
 .bar-todo       { background: #dee2e6; color: #495057; }
 .bar-in_progress { background: #cfe2ff; color: #084298; border-left: 3px solid #0d6efd; }
+.bar-paused     { background: #fff3cd; color: #664d03; border-left: 3px solid #ffc107; }
 .bar-blocked    { background: #f8d7da; color: #842029; border-left: 3px solid #dc3545; }
 .bar-done       { background: #d1e7dd; color: #0a3622; }
 
