@@ -470,14 +470,23 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     });
   }
 
-  const quickAdd = async (title) => {
-    try {
-      const task = await api.post('/tasks/', { title, project_id: projectId, duration: 1, status: 'todo' });
-      await showProjectDetail(el, projectId, task.id);
-    } catch (err) { alert(`Error: ${err.message}`); }
+  const nextTitle = (base) => {
+    const re = new RegExp(`^${base}(?:\\s+(\\d+))?$`);
+    const nums = tasks.map(t => { const m = t.title.match(re); return m ? parseInt(m[1] || '1') : 0; });
+    const max = Math.max(0, ...nums);
+    return max === 0 ? `${base} 1` : `${base} ${max + 1}`;
   };
-  el.querySelector('#quick-bug-btn')?.addEventListener('click', () => quickAdd('Bug Fix'));
-  el.querySelector('#quick-feature-btn')?.addEventListener('click', () => quickAdd('Add Feature'));
+  const quickAdd = async (btn, base) => {
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '…';
+    try {
+      const task = await api.post('/tasks/', { title: nextTitle(base), project_id: projectId, duration: 1, status: 'todo' });
+      await showProjectDetail(el, projectId, task.id);
+    } catch (err) { alert(`Error: ${err.message}`); btn.disabled = false; btn.textContent = orig; }
+  };
+  el.querySelector('#quick-bug-btn')?.addEventListener('click', e => quickAdd(e.currentTarget, 'Bug Fix'));
+  el.querySelector('#quick-feature-btn')?.addEventListener('click', e => quickAdd(e.currentTarget, 'Add Feature'));
 
   const addForm = el.querySelector('#add-task-form');
   setupAutoCalcEnd(addForm);
