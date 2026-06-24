@@ -38,13 +38,13 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     if resource.kind not in (ResourceKind.cpu, ResourceKind.gpu):
         raise HTTPException(status_code=422, detail="Runner only manages cpu/gpu resources")
 
-    # Don't claim if a task is already running on this resource.
+    # Don't claim if a task is already running or paused on this resource.
     # The runner is single-threaded: one task at a time regardless of capacity.
     already_running = session.exec(
         select(Task)
         .join(TaskResource, Task.id == TaskResource.task_id)
         .where(TaskResource.resource_id == resource_id)
-        .where(Task.status == TaskStatus.in_progress)
+        .where(Task.status.in_([TaskStatus.in_progress, TaskStatus.paused]))
         .limit(1)
     ).first()
     if already_running:
