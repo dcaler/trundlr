@@ -7,7 +7,7 @@ function taskSortKey(t) {
   return t.start_date ? new Date(t.start_date).getTime() : Infinity;
 }
 
-async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
+async function showTaskBoard(el, showCompleted = false, resourceFilter = null, showDepSolved = false) {
   el.innerHTML = '<p class="loading">Loading…</p>';
 
   const [tasks, projects, resources] = await Promise.all([
@@ -25,7 +25,9 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
   const scoped = resourceFilter
     ? tasks.filter(t => (t.resource_ids || []).includes(resourceFilter))
     : tasks;
-  const visible = showCompleted ? scoped : scoped.filter(t => t.status !== 'done');
+  const visible = scoped
+    .filter(t => showCompleted || t.status !== 'done')
+    .filter(t => showDepSolved || !(t.depends_on_id && taskById[t.depends_on_id]?.status === 'done'));
   // Blocked tasks always go to the bottom; within groups sort by start_date then priority.
   visible.sort((a, b) => {
     const aBlocked = a.status === 'blocked' ? 1 : 0;
@@ -73,7 +75,8 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
     </tr>`;
   }).join('');
 
-  const showDoneChecked = showCompleted ? 'checked' : '';
+  const showDoneChecked     = showCompleted  ? 'checked' : '';
+  const showDepSolvedChecked = showDepSolved ? 'checked' : '';
   const totalCount = scoped.length;
   const doneCount  = scoped.filter(t => t.status === 'done').length;
 
@@ -94,6 +97,9 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
         </select>
       </label>
       <label style="font-size:0.9em;margin-left:auto">
+        <input type="checkbox" id="show-dep-solved" ${showDepSolvedChecked}> Show dependency met
+      </label>
+      <label style="font-size:0.9em">
         <input type="checkbox" id="show-done" ${showDoneChecked}> Show completed
       </label>
     </div>
@@ -114,12 +120,15 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
         </table>`}
   `;
 
+  el.querySelector('#show-dep-solved')?.addEventListener('change', e => {
+    showTaskBoard(el, showCompleted, resourceFilter, e.target.checked);
+  });
   el.querySelector('#show-done')?.addEventListener('change', e => {
-    showTaskBoard(el, e.target.checked, resourceFilter);
+    showTaskBoard(el, e.target.checked, resourceFilter, showDepSolved);
   });
 
   el.querySelector('#filter-resource')?.addEventListener('change', e => {
-    showTaskBoard(el, showCompleted, parseInt(e.target.value) || null);
+    showTaskBoard(el, showCompleted, parseInt(e.target.value) || null, showDepSolved);
   });
 
   el.querySelector('#btn-reflow')?.addEventListener('click', async () => {
@@ -135,7 +144,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
         btn.textContent = '↺ Re-flow';
       } else {
         if (hasUnscheduled) alert(reflowSummary(result));
-        await showTaskBoard(el, showCompleted, resourceFilter);
+        await showTaskBoard(el, showCompleted, resourceFilter, showDepSolved);
       }
     } catch (err) {
       alert(`Re-flow failed: ${err.message}`);
@@ -177,7 +186,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
       }
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, patch);
-        await showTaskBoard(el, showCompleted, resourceFilter);
+        await showTaskBoard(el, showCompleted, resourceFilter, showDepSolved);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
@@ -187,7 +196,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null) {
       try {
         const nowPinned = btn.dataset.pinned === '1';
         await api.patch(`/tasks/${btn.dataset.id}`, { pinned: !nowPinned });
-        await showTaskBoard(el, showCompleted, resourceFilter);
+        await showTaskBoard(el, showCompleted, resourceFilter, showDepSolved);
       } catch (err) { alert(`Error: ${err.message}`); }
     });
   });
