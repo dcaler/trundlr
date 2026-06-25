@@ -285,11 +285,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     depthCache[id] = t ? 1 + depDepth(t.depends_on_id) : 0;
     return depthCache[id];
   };
-  const TERMINAL = new Set(['done', 'failed']);
   tasks.sort((a, b) => {
-    const aT = TERMINAL.has(a.status) ? 1 : 0;
-    const bT = TERMINAL.has(b.status) ? 1 : 0;
-    if (aT !== bT) return aT - bT;
     const aS = a.start_date ? new Date(a.start_date).getTime() : Infinity;
     const bS = b.start_date ? new Date(b.start_date).getTime() : Infinity;
     if (aS !== bS) return aS - bS;
