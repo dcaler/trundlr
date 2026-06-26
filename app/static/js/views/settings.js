@@ -205,8 +205,8 @@ async function renderCyclesSection(container, resources) {
 
   const templateCards = templates.map(t => {
     const stepRows = t.steps.map((s, i) => `
-      <tr class="cycle-step-row" data-step-id="${s.id}">
-        <td style="color:var(--text-muted)">${i + 1}</td>
+      <tr class="cycle-step-row" data-step-id="${s.id}" draggable="true">
+        <td style="color:var(--text-muted);cursor:grab;user-select:none" title="Drag to reorder">⠿ ${i + 1}</td>
         <td><input name="title" value="${escHtml(s.title)}" style="width:140px"></td>
         <td><input name="duration" type="number" min="0.01" step="any" value="${s.duration ?? ''}" placeholder="—" style="width:70px"></td>
         <td><input name="command" value="${escHtml(s.command ?? '')}" placeholder="shell command (optional)" style="width:220px;font-family:monospace"></td>
@@ -300,6 +300,40 @@ async function renderCyclesSection(container, resources) {
       row.querySelector('.del-step-btn').addEventListener('click', async () => {
         try { await api.delete(`/cycle-templates/steps/${sid}`); await rerender(); }
         catch (err) { alert(`Error: ${err.message}`); }
+      });
+    });
+
+    // Drag-and-drop resequencing
+    let dragSrc = null;
+    card.querySelectorAll('.cycle-step-row').forEach(row => {
+      row.addEventListener('dragstart', e => {
+        dragSrc = row;
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => row.style.opacity = '0.4', 0);
+      });
+      row.addEventListener('dragend', () => { row.style.opacity = ''; dragSrc = null; });
+      row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+      row.addEventListener('dragenter', e => { e.preventDefault(); if (row !== dragSrc) row.style.outline = '2px solid var(--primary,#0d6efd)'; });
+      row.addEventListener('dragleave', () => { row.style.outline = ''; });
+      row.addEventListener('drop', async e => {
+        e.preventDefault();
+        row.style.outline = '';
+        if (!dragSrc || dragSrc === row) return;
+        const tbody = row.closest('tbody');
+        const rows = [...tbody.querySelectorAll('.cycle-step-row')];
+        const fromIdx = rows.indexOf(dragSrc);
+        const toIdx   = rows.indexOf(row);
+        rows.splice(fromIdx, 1);
+        rows.splice(toIdx, 0, dragSrc);
+        rows.forEach(r => tbody.insertBefore(r, tbody.querySelector('.add-step-row')));
+        // Update position numbers in the # column
+        rows.forEach((r, i) => { r.querySelector('td:first-child').textContent = `⠿ ${i + 1}`; });
+        // Persist new order
+        try {
+          await Promise.all(rows.map((r, i) =>
+            api.patch(`/cycle-templates/steps/${r.dataset.stepId}`, { position: i })
+          ));
+        } catch (err) { alert(`Error saving order: ${err.message}`); await rerender(); }
       });
     });
 
