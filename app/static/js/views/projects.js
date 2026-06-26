@@ -275,8 +275,12 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   // tasks = only this project's tasks (for the task list); allTasks used for dependency lookup
   const tasks = allTasks.filter(t => t.project_id === projectId);
 
-  // Sort by flow: done/failed last, then by start_date (scheduled first), then by
-  // dependency chain depth (so unscheduled tasks respect their intended order), then id.
+  const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
+  const taskById     = Object.fromEntries(allTasks.map(t => [t.id, t]));
+  const projById     = Object.fromEntries(allProjects.map(p => [p.id, p]));
+
+  // Sort by flow: start_date (scheduled first), then dependency chain depth
+  // (so unscheduled tasks respect their intended order), then id.
   const depthCache = {};
   const depDepth = id => {
     if (id == null) return 0;
@@ -291,10 +295,6 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     if (aS !== bS) return aS - bS;
     return depDepth(a.id) - depDepth(b.id) || a.id - b.id;
   });
-
-  const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
-  const taskById     = Object.fromEntries(allTasks.map(t => [t.id, t]));
-  const projById     = Object.fromEntries(allProjects.map(p => [p.id, p]));
 
   // Dependency dropdown grouped by project — excludes selfId to prevent self-reference.
   // Current project appears first, then other projects alphabetically.
