@@ -50,7 +50,7 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     if already_running:
         return Response(status_code=204)
 
-    task = session.exec(
+    candidates = session.exec(
         select(Task)
         .join(TaskResource, Task.id == TaskResource.task_id)
         .where(TaskResource.resource_id == resource_id)
@@ -58,20 +58,25 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
         .where(Task.command.isnot(None))
         .where(Task.command != "")
         .order_by(nullslast(Task.start_date))
-        .limit(1)
-    ).first()
+        .limit(50)
+    ).all()
+
+    # Walk candidates in order; skip any whose dependency isn't satisfied.
+    # This lets unrelated tasks run past a chain blocked by a failed upstream.
+    task = None
+    idle_reason = "empty-queue"
+    for candidate in candidates:
+        if candidate.depends_on_id is not None:
+            dep = session.get(Task, candidate.depends_on_id)
+            if dep is None or dep.status != TaskStatus.done:
+                if idle_reason == "empty-queue" and dep is not None:
+                    idle_reason = f"waiting-dep:{candidate.id}:{dep.id}:{dep.status}"
+                continue
+        task = candidate
+        break
 
     if task is None:
-        return Response(status_code=204, headers={"X-Runner-Idle": "empty-queue"})
-
-    # If the next task's dependency isn't done yet, wait — never skip ahead.
-    if task.depends_on_id is not None:
-        dep = session.get(Task, task.depends_on_id)
-        if dep is not None and dep.status != TaskStatus.done:
-            return Response(
-                status_code=204,
-                headers={"X-Runner-Idle": f"waiting-dep:{task.id}:{dep.id}:{dep.status}"},
-            )
+        return Response(status_code=204, headers={"X-Runner-Idle": idle_reason})
 
     now = _now_naive(session)
     task.status = TaskStatus.in_progress

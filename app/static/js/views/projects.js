@@ -216,6 +216,7 @@ async function showProjectsList(el, editingId = null) {
 
   const editForm = el.querySelector('.edit-project-form');
   if (editForm) {
+    editForm.closest('tr').scrollIntoView({ behavior: 'smooth', block: 'center' });
     editForm.addEventListener('submit', async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
