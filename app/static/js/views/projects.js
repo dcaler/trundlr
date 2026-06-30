@@ -283,11 +283,13 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   // Sort by flow: start_date (scheduled first), then dependency chain depth
   // (so unscheduled tasks respect their intended order), then id.
   const depthCache = {};
-  const depDepth = id => {
+  const depDepth = (id, visiting = new Set()) => {
     if (id == null) return 0;
     if (depthCache[id] !== undefined) return depthCache[id];
+    if (visiting.has(id)) return 0;  // cycle — break recursion
+    visiting.add(id);
     const t = taskById[id];
-    depthCache[id] = t ? 1 + depDepth(t.depends_on_id) : 0;
+    depthCache[id] = t ? 1 + depDepth(t.depends_on_id, visiting) : 0;
     return depthCache[id];
   };
   tasks.sort((a, b) => {

@@ -143,10 +143,21 @@ def update_task(
         _set_resources(task.id, updates.pop("resource_ids"), session)
 
     if "depends_on_id" in updates:
-        if updates["depends_on_id"] is not None and not session.get(Task, updates["depends_on_id"]):
-            raise HTTPException(status_code=404, detail="Dependency task not found")
-        # Choosing a new dependency clears the "broken dependency" flag.
-        if updates["depends_on_id"] is not None:
+        new_dep = updates["depends_on_id"]
+        if new_dep is not None:
+            if not session.get(Task, new_dep):
+                raise HTTPException(status_code=404, detail="Dependency task not found")
+            # Walk the chain from new_dep upward; if we reach task_id it's a cycle.
+            cur = new_dep
+            visited = set()
+            while cur is not None:
+                if cur == task_id:
+                    raise HTTPException(status_code=422, detail="Setting this dependency would create a cycle")
+                if cur in visited:
+                    break
+                visited.add(cur)
+                parent = session.get(Task, cur)
+                cur = parent.depends_on_id if parent else None
             task.dependency_broken = False
 
     if "project_id" in updates:
