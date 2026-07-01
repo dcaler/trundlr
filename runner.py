@@ -242,7 +242,16 @@ def main() -> None:
                     stdout=lf,
                     stderr=subprocess.STDOUT,
                 )
-            proc.wait()
+            last_log_push = time.time()
+            while proc.poll() is None:
+                time.sleep(1)
+                if time.time() - last_log_push >= 10:
+                    try:
+                        _api(base_url, "PATCH", f"/tasks/{task_id}",
+                             {"log_tail": _tail(log_file, log_tail_lines)})
+                    except Exception:
+                        pass
+                    last_log_push = time.time()
             exit_code = proc.returncode
         except Exception as e:
             _log(f"Task {task_id} launch error: {e}")

@@ -550,11 +550,12 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       const logArea = el.querySelector('#task-log-live');
       const pollLog = async () => {
         try {
-          const text = await fetch(`/api/tasks/${editingTaskId}/log?n=100`).then(r => r.ok ? r.text() : null);
-          if (text !== null && logArea) { logArea.value = text; logArea.scrollTop = logArea.scrollHeight; }
+          const t = await api.get(`/tasks/${editingTaskId}`);
+          if (!logArea) return;
+          if (t.log_tail) { logArea.value = t.log_tail; logArea.scrollTop = logArea.scrollHeight; }
+          if (t.status !== 'in_progress') { clearInterval(el._logPollInterval); el._logPollInterval = null; }
         } catch {}
       };
-      pollLog();
       el._logPollInterval = setInterval(pollLog, 5000);
     }
     editTaskForm.addEventListener('submit', async e => {
