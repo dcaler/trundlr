@@ -265,6 +265,7 @@ async function showProjectsList(el, editingId = null) {
 }
 
 async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = null) {
+  if (el._logPollInterval) { clearInterval(el._logPollInterval); el._logPollInterval = null; }
   el.innerHTML = '<p class="loading">Loading…</p>';
   const [project, allTasks, resources, allProjects, cycleTemplates] = await Promise.all([
     api.get(`/projects/${projectId}`),
@@ -370,7 +371,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
               <button type="submit" class="btn btn-primary">Save</button>
               <button type="button" class="btn btn-ghost cancel-task-edit">Cancel</button>
             </div>
-            ${t.log_tail ? `<div style="width:100%;margin-top:0.5rem"><label>Log output</label><textarea readonly style="width:100%;height:10rem;font-family:monospace;font-size:0.75rem;white-space:pre">${escHtml(t.log_tail)}</textarea></div>` : ''}
+            ${(t.log_tail || t.status === 'in_progress') && t.command ? `<div style="width:100%;margin-top:0.5rem"><label>Log output${t.status === 'in_progress' ? ' <span style="color:var(--text-muted);font-weight:normal;font-size:0.8em">(live)</span>' : ''}</label><textarea id="task-log-live" readonly style="width:100%;height:10rem;font-family:monospace;font-size:0.75rem;white-space:pre">${escHtml(t.log_tail || '')}</textarea></div>` : ''}
           </form>
         </td>
       </tr>`;
@@ -544,6 +545,18 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     setupAutoCalcEnd(editTaskForm);
     setupDependencyAutoStart(editTaskForm, taskById);
     const editRow = editTaskForm.closest('tr');
+    const editingTask = tasks.find(t => t.id === editingTaskId);
+    if (editingTask?.status === 'in_progress' && editingTask?.command) {
+      const logArea = el.querySelector('#task-log-live');
+      const pollLog = async () => {
+        try {
+          const text = await fetch(`/api/tasks/${editingTaskId}/log?n=100`).then(r => r.ok ? r.text() : null);
+          if (text !== null && logArea) { logArea.value = text; logArea.scrollTop = logArea.scrollHeight; }
+        } catch {}
+      };
+      pollLog();
+      el._logPollInterval = setInterval(pollLog, 5000);
+    }
     editTaskForm.addEventListener('submit', async e => {
       e.preventDefault();
       const fd = new FormData(e.target);

@@ -1,8 +1,11 @@
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import List
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from sqlmodel import Session, select
 
 from app.database import get_db
@@ -179,6 +182,22 @@ def update_task(
         _notify_status(session, task)
     session.refresh(task)
     return _task_read(task, session)
+
+
+_LOG_DIR = Path(
+    os.environ.get("RUNNER_LOG_DIR", str(Path(__file__).resolve().parent.parent.parent / "logs"))
+)
+
+@router.get("/{task_id}/log", response_class=PlainTextResponse)
+def get_task_log(task_id: int = DBId(), n: int = Query(default=100, ge=1, le=2000),
+                 session: Session = Depends(get_db)):
+    """Return the last n lines of the runner log for a task, or 404 if no log exists."""
+    _get_task_or_404(task_id, session)
+    log_file = _LOG_DIR / f"task-{task_id}.log"
+    if not log_file.is_file():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    lines = log_file.read_text(errors="replace").splitlines()
+    return "\n".join(lines[-n:])
 
 
 @router.delete("/{task_id}", status_code=204)
