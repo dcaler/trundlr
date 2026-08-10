@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    container_name: trundlr-app
+    ports:
+      - "${PORT:-8251}:8251"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/data/trundlr.db}
+    volumes:
+      - trundlr-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8251/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  trundlr-data:
+    driver: local

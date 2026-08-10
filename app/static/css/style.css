@@ -1,0 +1,652 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --navy: #1a1a2e;
+  --navy-light: #2d3a6e;
+  --accent: #7c9ef7;
+  --bg: #f8f9fa;
+  --text: #212529;
+  --text-muted: #6c757d;
+  --border: #dee2e6;
+  --danger: #dc3545;
+  --warning: #ffc107;
+  --success: #198754;
+  --nav-height: 56px;
+  --gantt-label-w: 160px;  /* resource-name column width; read by schedule.js (GANTT_LABEL_W) */
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── Navigation ─────────────────────────────────────────────────────────── */
+
+nav {
+  background: var(--navy);
+  color: white;
+  height: var(--nav-height);
+  padding: 0 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 4px rgba(0,0,0,.3);
+}
+
+.nav-brand {
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  user-select: none;
+}
+
+.nav-links {
+  display: flex;
+  list-style: none;
+  gap: 0.25rem;
+}
+
+.nav-links a {
+  color: #adb5bd;
+  text-decoration: none;
+  padding: 0.35rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+
+.nav-links a:hover {
+  background: var(--navy-light);
+  color: white;
+}
+
+.nav-links a.active {
+  background: var(--accent);
+  color: var(--navy);
+}
+
+/* ── Main content ───────────────────────────────────────────────────────── */
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+/* ── Typography ─────────────────────────────────────────────────────────── */
+
+h1 { font-size: 1.5rem; color: var(--navy); margin-bottom: 1rem; }
+h2 { font-size: 1.15rem; color: var(--navy); margin-bottom: 0.75rem; }
+
+/* ── Utilities ──────────────────────────────────────────────────────────── */
+
+.error {
+  color: var(--danger);
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: #fff5f5;
+}
+
+.loading {
+  color: var(--text-muted);
+  padding: 2rem;
+  text-align: center;
+}
+
+/* ── Cards / panels ─────────────────────────────────────────────────────── */
+
+.card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+button, .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+button:hover, .btn:hover { opacity: 0.85; }
+
+.btn-primary { background: var(--accent); color: var(--navy); }
+.btn-danger  { background: var(--danger); color: white; }
+.btn-ghost   { background: transparent; border-color: var(--border); color: var(--text); }
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+th {
+  background: #f1f3f5;
+  text-align: left;
+  padding: 0.5rem 0.85rem;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #f8f9fa; }
+
+/* ── Forms ──────────────────────────────────────────────────────────────── */
+
+.form-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+label { display: block; font-weight: 500; margin-bottom: 0.25rem; font-size: 0.8rem; }
+
+input, select, textarea {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-family: inherit;
+  background: white;
+  color: var(--text);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Hide browser spinner arrows on all number inputs */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Auto-computed readonly field */
+input[readonly] {
+  background: #e9ecef;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* ── Status badges ──────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-todo       { background: #e9ecef; color: #495057; }
+.badge-in_progress { background: #cfe2ff; color: #084298; }
+.badge-paused     { background: #fff3cd; color: #664d03; }
+.badge-blocked    { background: #f8d7da; color: #842029; }
+.badge-done       { background: #d1e7dd; color: #0a3622; }
+.badge-failed     { background: #f5c6cb; color: #7b1020; }
+
+/* ── Project priority badges ────────────────────────────────────────────── */
+
+.priority-p1 { background: #dc3545; color: white; }
+.priority-p2 { background: #fd7e14; color: white; }
+.priority-p3 { background: #ffc107; color: #333; }
+.priority-p4 { background: #adb5bd; color: #495057; }
+
+/* ── Gantt timeline ─────────────────────────────────────────────────────── */
+
+.gantt-legend {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.gantt-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-muted);
+}
+
+.gantt-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.gantt-scroll-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white;
+  position: relative;
+}
+
+.gantt-now-line {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(220, 53, 69, 0.65);
+  pointer-events: none;
+  z-index: 6;
+}
+
+.gantt-table {
+  border-collapse: collapse;
+  white-space: nowrap;
+  table-layout: fixed;
+  overflow: visible; /* override generic table{overflow:hidden} so sticky cells work */
+}
+
+/* Resource-name column — pinned via JS translateX (CSS sticky unreliable on collapsed tables) */
+.gantt-label-th,
+.gantt-label-td {
+  position: relative;
+  z-index: 2;
+  background: white;
+  min-width: var(--gantt-label-w);
+  max-width: var(--gantt-label-w);
+  width: var(--gantt-label-w);
+  border-right: 2px solid var(--border);
+  padding: 0 0.75rem;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gantt-label-th {
+  background: #f1f3f5;
+  height: 28px;
+}
+
+.gantt-label-td {
+  height: 44px;
+  border-bottom: 1px solid #f1f3f5;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.gantt-unassigned {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
+/* Per-resource name row — hidden on desktop (name lives in the pinned label
+   column), shown on mobile above each track. .gantt-name-inner is pinned to
+   the visible-left edge via the same translateX scroll sync as label cells. */
+.gantt-name-row { display: none; }
+
+.gantt-name-td {
+  padding: 0;
+  background: #f1f3f5;
+  border-bottom: 1px solid var(--border);
+}
+
+.gantt-name-inner {
+  display: inline-block;
+  position: relative;
+  z-index: 3;
+  max-width: 92vw;
+  padding: 3px 8px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: #f1f3f5;
+  border-radius: 0 4px 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gantt-name-inner.gantt-unassigned {
+  font-weight: 400;
+  font-style: italic;
+}
+
+/* Date header cells */
+.gantt-month-th {
+  background: #f1f3f5;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  padding: 0.3rem 0;
+  height: 24px;
+}
+
+.gantt-day-th {
+  background: #f1f3f5;
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border);
+  border-right: 1px solid #e9ecef;
+  width: 28px;
+  min-width: 28px;
+  max-width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.gantt-today {
+  background: #e8f4fd !important;
+  color: #0d6efd !important;
+  font-weight: 700 !important;
+}
+
+/* Track row: holds absolutely-positioned task bars */
+.gantt-track-td {
+  padding: 0;
+  border-bottom: 1px solid #f1f3f5;
+  vertical-align: top;
+}
+
+.gantt-track {
+  position: relative;
+  /* height set dynamically by JS based on number of lanes */
+}
+
+/* Task bars */
+.gantt-bar {
+  position: absolute;
+  height: 28px;
+  border-radius: 4px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: default;
+  box-shadow: 0 1px 2px rgba(0,0,0,.08);
+}
+
+.bar-todo       { background: #dee2e6; color: #495057; }
+.bar-in_progress { background: #cfe2ff; color: #084298; border-left: 3px solid #0d6efd; }
+.bar-paused     { background: #fff3cd; color: #664d03; border-left: 3px solid #ffc107; }
+.bar-blocked    { background: #f8d7da; color: #842029; border-left: 3px solid #dc3545; }
+.bar-done       { background: #d1e7dd; color: #0a3622; }
+
+/* Priority top-stripe on Gantt bars — matches the priority-pN badge palette */
+.bar-p1 { border-top: 3px solid #dc3545; }  /* On Fire   — red    */
+.bar-p2 { border-top: 3px solid #fd7e14; }  /* Front Burner — orange */
+.bar-p3 { border-top: 3px solid #ffc107; }  /* Back Burner  — amber  */
+.bar-p4 { border-top: 3px solid #adb5bd; }  /* Crock Pot — grey   */
+
+/* ── Tab bar ─────────────────────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0;
+  border-bottom: 2px solid var(--border);
+}
+
+.tab-btn {
+  padding: 0.45rem 1.1rem;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: -2px;
+  transition: color 0.15s;
+}
+
+.tab-btn:hover { color: var(--text); background: #f8f9fa; }
+
+.tab-btn.active {
+  background: white;
+  color: var(--navy);
+  border-color: var(--border) var(--border) white;
+  font-weight: 600;
+}
+
+/* ── Utilization heatmap ─────────────────────────────────────────────────── */
+
+.util-label-td {
+  /* Overrides gantt-label-td height so two-line content can breathe */
+  height: auto !important;
+  padding: 0.5rem 0.75rem !important;
+  line-height: 1.4;
+}
+
+.util-cell {
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0;
+  height: 44px;
+  vertical-align: middle;
+  border-right: 1px solid rgba(0,0,0,0.05);
+  cursor: default;
+  transition: opacity 0.1s;
+}
+
+.util-cell:hover { opacity: 0.85; }
+
+.util-conflict {
+  outline: 2px solid #dc3545;
+  outline-offset: -2px;
+}
+
+/* Today's heatmap cell: blue text + bold, but keep its semantic fill colour
+   (a blue background would mask the over/at/under colour and confuse). */
+.util-today {
+  color: #0d6efd !important;
+  font-weight: 700 !important;
+}
+
+/* Per-resource forward summary under the name — wrap so it stays readable. */
+.util-summary {
+  display: block;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+/* ── Mobile / responsive ─────────────────────────────────────────────────── */
+
+.nav-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  /* Utilization heatmap keeps a (narrower) label column. */
+  :root {
+    --gantt-label-w: 96px;
+  }
+
+  .util-label-td { padding: 0.4rem !important; }
+  .util-label-td small { display: none; }  /* drop the "Peak %"/conflict line */
+
+  /* Timeline tab: collapse the pinned label column to zero and surface each
+     resource name on its own full-width row instead (.gantt-name-row). */
+  .gantt-timeline { --gantt-label-w: 0px; }
+  .gantt-timeline .gantt-label-td,
+  .gantt-timeline .gantt-label-th {
+    padding: 0;
+    border-right: 0;
+  }
+  .gantt-timeline .gantt-name-row { display: table-row; }
+
+  nav {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--nav-height);
+    gap: 0;
+    padding: 0 1rem;
+    align-items: center;
+  }
+
+  .nav-brand {
+    flex: 1;
+  }
+
+  .nav-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.2);
+    color: white;
+    font-size: 1.1rem;
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+
+  .nav-toggle:hover {
+    background: var(--navy-light);
+    opacity: 1;
+  }
+
+  #nav-version {
+    display: none;
+  }
+
+  .nav-links {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    padding: 0.25rem 0 0.5rem;
+    gap: 0;
+  }
+
+  .nav-links.open {
+    display: flex;
+  }
+
+  .nav-links li {
+    display: block;
+  }
+
+  .nav-links a {
+    display: block;
+    padding: 0.65rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+
+  main {
+    padding: 0.75rem;
+  }
+
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 1.05rem; }
+
+  /* Non-Gantt tables: allow horizontal scroll on mobile */
+  table:not(.gantt-table) {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Forms stack vertically. !important overrides the inline width:NNNpx
+     styles set on individual inputs, which would otherwise overflow. */
+  .form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .form-row > * {
+    width: 100% !important;
+  }
+
+  .form-row input:not([type="checkbox"]):not([type="radio"]),
+  .form-row select,
+  .form-row textarea {
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  /* Checkbox/radio labels (e.g. the resource picker) keep the box inline with
+     its text instead of letting the 100%-wide rule above wrap the name below. */
+  .form-row input[type="checkbox"],
+  .form-row input[type="radio"] {
+    width: auto !important;
+    flex: none;
+  }
+
+  /* Larger touch targets */
+  button, .btn {
+    min-height: 40px;
+  }
+
+  /* Gantt legend wraps */
+  .gantt-legend {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  /* Cards full-width */
+  .card {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
