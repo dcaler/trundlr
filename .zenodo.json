@@ -1,0 +1,18 @@
+{
+  "upload_type": "software",
+  "title": "trundlr: task and resource scheduling for computational research",
+  "description": "<p>A lightweight task and resource management application with timeline and calendar views and capacity/utilisation tracking, managing projects, tasks and a mixed pool of resources (human, CPU and GPU).</p>",
+  "creators": [
+    {
+      "name": "Reeves, D. Cale",
+      "orcid": "0000-0001-5156-594X"
+    }
+  ],
+  "keywords": [
+    "research software",
+    "scheduling",
+    "capacity planning",
+    "research infrastructure"
+  ],
+  "access_right": "open"
+}

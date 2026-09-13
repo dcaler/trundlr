@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "trundlr: task and resource scheduling for computational research"
+abstract: >-
+  A lightweight task and resource management application with timeline and
+  calendar views and capacity/utilisation tracking, managing projects, tasks
+  and a mixed pool of resources (human, CPU and GPU).
+authors:
+  - family-names: Reeves
+    given-names: D. Cale
+    orcid: "https://orcid.org/0000-0001-5156-594X"
+repository-code: "https://github.com/dcaler/trundlr"
+url: "https://github.com/dcaler/trundlr"
+license-url: "https://polyformproject.org/licenses/noncommercial/1.0.0"
+keywords:
+  - research software
+  - scheduling
+  - capacity planning
+  - research infrastructure
+version: 0.1.0
+date-released: "2026-09-13"
