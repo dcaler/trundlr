@@ -47,3 +47,6 @@ logs/
 planningDocs/
 resume
 Screenshot*.png
+
+# Synology NAS thumbnail/metadata dirs
+@eaDir/

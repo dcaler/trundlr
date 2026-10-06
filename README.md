@@ -1,6 +1,6 @@
 # trundlr
 
-A lightweight task and resource management app with timeline/calendar views and capacity/utilization tracking. Manages projects, tasks, and a mixed pool of resources (humans, CPU nodes, GPU nodes). Ships as a Docker container.
+A lightweight task and resource management app with timeline/calendar views and capacity/utilization tracking. Manages projects, tasks, and a mixed pool of resources (humans, AI agents, CPU nodes, GPU nodes). CPU/GPU tasks can be executed by a runner daemon (`runner.py`), and each resource is exposed as a CalDAV calendar. Ships as a Docker container.
 
 **Stack:** FastAPI + SQLModel/SQLite · Vanilla JS SPA · pytest · Docker
 
@@ -21,10 +21,10 @@ cd trundlr
 docker compose up -d
 
 # 3. Open the UI
-open http://localhost:8251
+xdg-open http://localhost:8251
 
 # 4. Browse the interactive API docs
-open http://localhost:8251/docs
+xdg-open http://localhost:8251/docs
 ```
 
 Data is persisted in a named Docker volume (`trundlr-data`) and survives container restarts.
@@ -38,17 +38,16 @@ Data is persisted in a named Docker volume (`trundlr-data`) and survives contain
 ```bash
 # 1. Create and activate a virtual environment
 python3 -m venv venv
-source venv/bin/activate       # macOS/Linux
-# venv\Scripts\activate        # Windows
+source venv/bin/activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
 # 3. Run the server
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8251
 
 # 4. Open the UI
-open http://localhost:8251
+xdg-open http://localhost:8251
 ```
 
 The database file (`trundlr.db`) is created in the working directory on first startup.
@@ -99,7 +98,7 @@ docker compose down -v
 | URL | Description |
 |-----|-------------|
 | `/#/projects` | Create/edit projects; add tasks, assign resources and dates inline |
-| `/#/resources` | Create/edit resources (human, CPU, GPU) with capacity |
+| `/#/resources` | Create/edit resources (human, AI, CPU, GPU), availability windows and blockouts |
 | `/#/schedule` → Timeline | Gantt-style timeline — tasks as bars across a configurable date range |
 | `/#/schedule` → Utilization | Per-resource capacity heatmap; over-allocated days flagged with contributing tasks |
 
@@ -124,13 +123,13 @@ Interactive docs (Swagger UI) are available at **`/docs`** when the app is runni
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/resources/` | List all resources |
-| `POST` | `/api/resources/` | Create a resource (`name`, `kind`, `capacity` required) |
+| `POST` | `/api/resources/` | Create a resource (`name`, `kind` required) |
 | `GET` | `/api/resources/{id}` | Get a resource by id |
 | `PATCH` | `/api/resources/{id}` | Partial update |
-| `DELETE` | `/api/resources/{id}` | Delete resource; tasks are preserved with `resource_id` cleared |
+| `DELETE` | `/api/resources/{id}` | Delete resource; tasks are preserved with the assignment removed |
 
-`kind` must be one of `human`, `cpu`, or `gpu`. `capacity` must be > 0.  
-For humans, capacity is hours/day (e.g. `8.0`). For CPU/GPU, it is parallel slots (e.g. `4.0`).
+`kind` must be one of `human`, `ai`, `cpu`, or `gpu`.  
+Availability defaults to `available_from`–`available_to` (`"09:00"`–`"17:00"`) on `available_days` (bitmask, bit 0 = Mon; default `31` = Mon–Fri). Per-day windows (`/{id}/windows`) replace that when present; blockouts (`/{id}/blockouts`) and CalDAV-painted blocks subtract from it.
 
 ### Tasks
 
@@ -142,10 +141,10 @@ For humans, capacity is hours/day (e.g. `8.0`). For CPU/GPU, it is parallel slot
 | `PATCH` | `/api/tasks/{id}` | Partial update — assign/unassign resource, set dates, change status |
 | `DELETE` | `/api/tasks/{id}` | Delete a task |
 
-`status` values: `todo`, `in_progress`, `blocked`, `done`.  
-`load` is units/day (hours for humans, slots for CPU/GPU); defaults to `1.0`.  
-`end_date` must not be before `start_date`.  
-Assign by setting `resource_id`; unassign with `"resource_id": null`.
+`status` values: `todo`, `in_progress`, `paused`, `blocked`, `done`, `failed`.  
+`duration` is total hours; `start_date`/`end_date` are datetimes and `end_date` must not be before `start_date`.  
+Assign resources with `resource_ids` (a task may have several); set a predecessor with `depends_on_id`.  
+`POST /api/schedule/reflow` re-places all unpinned `todo` tasks by project priority and dependencies.
 
 ### Schedule & utilization
 
@@ -218,17 +217,23 @@ All 321 tests run against an in-memory SQLite database — no external services 
 trundlr/
 ├── app/
 │   ├── main.py          # FastAPI app, lifespan (DB init), static mount
-│   ├── models.py        # SQLModel tables: Project, Resource, Task
+│   ├── models.py        # SQLModel tables: projects, resources, tasks, cycles, windows, blockouts
 │   ├── schemas.py       # Pydantic request/response schemas
-│   ├── database.py      # Engine, session factory, get_db dependency
+│   ├── database.py      # Engine, session factory, get_db, startup migrations
 │   ├── scheduling.py    # Capacity/utilization engine + conflict detection
 │   ├── gantt.py         # Date→pixel mapping for the Gantt timeline
+│   ├── email.py         # SMTP notifications
+│   ├── validation.py    # Shared id/date-range bounds
 │   ├── seed.py          # Demo data seeder
 │   ├── routers/
 │   │   ├── projects.py
 │   │   ├── resources.py
 │   │   ├── tasks.py
-│   │   └── schedule.py
+│   │   ├── schedule.py
+│   │   ├── cycles.py    # Reusable task-chain templates
+│   │   ├── caldav.py    # CalDAV server (task + block calendars)
+│   │   ├── runner.py    # Claim/reset endpoints for runner.py
+│   │   └── settings.py
 │   └── static/
 │       ├── index.html
 │       ├── css/style.css
@@ -236,9 +241,10 @@ trundlr/
 │           ├── api.js       # Fetch wrapper
 │           ├── app.js       # Hash-based router
 │           └── views/
-│               ├── projects.js
-│               ├── resources.js
-│               └── schedule.js
+│               ├── projects.js, resources.js, schedule.js
+│               └── taskboard.js, archive.js, settings.js, helper.js
+├── runner.py            # Task execution daemon for cpu/gpu resources
+├── extras/ubersicht/    # macOS desktop status widget
 ├── tests/               # pytest suite (321 tests)
 ├── Dockerfile
 ├── docker-compose.yml
