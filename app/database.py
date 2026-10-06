@@ -12,16 +12,25 @@ _engine = None
 def get_engine(database_url: str = "sqlite:///trundlr.db"):
     """Create and configure the SQLAlchemy engine.
 
-    For SQLite, enables foreign key constraint enforcement via PRAGMA.
+    For SQLite, enables foreign key constraint enforcement via PRAGMA, and WAL
+    journaling with a 30 s lock wait. In the default rollback journal a commit
+    locks out readers, so a runner's claim could fail with "database is locked"
+    while another runner's log-tail PATCH was committing.
     """
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    is_sqlite = database_url.startswith("sqlite")
+    connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
     engine = create_engine(database_url, connect_args=connect_args)
 
-    if database_url.startswith("sqlite"):
+    if is_sqlite:
+        in_memory = ":memory:" in database_url or database_url.rstrip("/") == "sqlite:"
+
         @event.listens_for(engine, "connect")
         def set_sqlite_pragma(dbapi_conn, connection_record):
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            if not in_memory:
+                cursor.execute("PRAGMA journal_mode=WAL")
             cursor.close()
 
     return engine

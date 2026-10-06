@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +8,7 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock, ResourceWindow, Task, TaskResource, TaskStatus
+from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock, ResourceSpan, ResourceWindow, Task, TaskResource, TaskStatus
 from app.schemas import BlockoutCreate, BlockoutRead, ResourceCreate, ResourceRead, ResourceUpdate, WindowCreate, WindowRead
 from app.scheduling import calblock_segments
 from app.validation import DBId
@@ -16,18 +16,56 @@ from app.validation import DBId
 router = APIRouter(prefix="/api/resources", tags=["resources"])
 
 
+def _spans_ids(resource_id: int, session: Session) -> list[int]:
+    return sorted(session.exec(
+        select(ResourceSpan.spans_id).where(ResourceSpan.resource_id == resource_id)
+    ).all())
+
+
+def _validate_spans(resource_id: Optional[int], spans_ids: list[int], session: Session) -> None:
+    """Spans are one level deep: a lane spans plain lanes, never another spanning
+    lane, and a lane that something spans cannot itself span others."""
+    if resource_id is not None and resource_id in spans_ids:
+        raise HTTPException(status_code=422, detail="A resource cannot span itself")
+    for sid in spans_ids:
+        if not session.get(Resource, sid):
+            raise HTTPException(status_code=404, detail=f"Resource {sid} not found")
+        if _spans_ids(sid, session):
+            raise HTTPException(status_code=422, detail=f"Resource {sid} spans other resources and cannot be spanned")
+    if spans_ids and resource_id is not None:
+        spanned_by = session.exec(
+            select(ResourceSpan).where(ResourceSpan.spans_id == resource_id)
+        ).first()
+        if spanned_by:
+            raise HTTPException(status_code=422, detail="A resource that is spanned cannot span others")
+
+
+def _set_spans(resource_id: int, spans_ids: list[int], session: Session) -> None:
+    for row in session.exec(select(ResourceSpan).where(ResourceSpan.resource_id == resource_id)).all():
+        session.delete(row)
+    for sid in dict.fromkeys(spans_ids):
+        session.add(ResourceSpan(resource_id=resource_id, spans_id=sid))
+
+
+def _resource_read(resource: Resource, session: Session) -> ResourceRead:
+    return ResourceRead(**resource.model_dump(), spans_ids=_spans_ids(resource.id, session))
+
+
 @router.get("/", response_model=List[ResourceRead])
 def list_resources(session: Session = Depends(get_db)):
-    return session.exec(select(Resource)).all()
+    return [_resource_read(r, session) for r in session.exec(select(Resource)).all()]
 
 
 @router.post("/", response_model=ResourceRead, status_code=201)
 def create_resource(data: ResourceCreate, session: Session = Depends(get_db)):
-    resource = Resource(**data.model_dump())
+    _validate_spans(None, data.spans_ids, session)
+    resource = Resource(**data.model_dump(exclude={"spans_ids"}))
     session.add(resource)
+    session.flush()
+    _set_spans(resource.id, data.spans_ids, session)
     session.commit()
     session.refresh(resource)
-    return resource
+    return _resource_read(resource, session)
 
 
 @router.get("/{resource_id}", response_model=ResourceRead)
@@ -35,7 +73,7 @@ def get_resource(resource_id: int = DBId(), session: Session = Depends(get_db)):
     resource = session.get(Resource, resource_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
-    return resource
+    return _resource_read(resource, session)
 
 
 @router.patch("/{resource_id}", response_model=ResourceRead)
@@ -47,12 +85,17 @@ def update_resource(
     resource = session.get(Resource, resource_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
-    for key, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    if "spans_ids" in updates:
+        spans_ids = updates.pop("spans_ids") or []
+        _validate_spans(resource_id, spans_ids, session)
+        _set_spans(resource_id, spans_ids, session)
+    for key, value in updates.items():
         setattr(resource, key, value)
     session.add(resource)
     session.commit()
     session.refresh(resource)
-    return resource
+    return _resource_read(resource, session)
 
 
 @router.get("/{resource_id}/next-available")
@@ -137,6 +180,10 @@ def delete_resource(resource_id: int = DBId(), session: Session = Depends(get_db
         session.delete(w)
     for b in session.exec(select(ResourceBlockout).where(ResourceBlockout.resource_id == resource_id)).all():
         session.delete(b)
+    for sp in session.exec(select(ResourceSpan).where(
+        (ResourceSpan.resource_id == resource_id) | (ResourceSpan.spans_id == resource_id)
+    )).all():
+        session.delete(sp)
     session.flush()  # send child deletes to DB before removing resource (FK ordering)
     session.delete(resource)
     session.commit()

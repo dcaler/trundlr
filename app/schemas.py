@@ -68,6 +68,7 @@ class ResourceCreate(BaseModel):
     available_from: str = "09:00"
     available_to: str = "17:00"
     available_days: int = 31  # Mon-Fri bitmask
+    spans_ids: list[BodyId] = []  # lanes this resource is built from (see ResourceSpan)
 
     @model_validator(mode="after")
     def validate_availability(self) -> "ResourceCreate":
@@ -88,6 +89,7 @@ class ResourceUpdate(BaseModel):
     available_from: Optional[str] = None
     available_to: Optional[str] = None
     available_days: Optional[int] = None
+    spans_ids: Optional[list[BodyId]] = None
 
 
 class ResourceRead(BaseModel):
@@ -97,6 +99,7 @@ class ResourceRead(BaseModel):
     available_from: str
     available_to: str
     available_days: int
+    spans_ids: list[int] = []
 
     model_config = {"from_attributes": True}
 

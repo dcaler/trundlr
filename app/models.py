@@ -48,6 +48,18 @@ class Resource(SQLModel, table=True):
     available_days: int = Field(default=31)        # Mon-Fri bitmask
 
 
+class ResourceSpan(SQLModel, table=True):
+    """Join table: resource_id is a lane built from spans_id (and its siblings).
+
+    E.g. a "GPU 0+1" lane spans the "GPU 0" and "GPU 1" lanes. Two resources
+    conflict — may not run tasks at the same time — when one spans the other or
+    both span a common resource. A spanning lane's eligible task drains the
+    lanes it spans so it is not starved (see app.routers.runner).
+    """
+    resource_id: int = Field(foreign_key="resource.id", primary_key=True)
+    spans_id: int = Field(foreign_key="resource.id", primary_key=True)
+
+
 class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     timezone: str = Field(default="UTC")

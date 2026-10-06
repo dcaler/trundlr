@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from app.models import (
     AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock,
-    ResourceWindow, Task, TaskResource, TaskStatus,
+    ResourceSpan, ResourceWindow, Task, TaskResource, TaskStatus,
 )
 
 _EPS = 1e-6  # tolerance for float hour comparisons
@@ -249,6 +249,40 @@ def is_blocked_at(session: Session, resource_id: int, when: datetime) -> bool:
         if _hhmm_to_hours(b.from_time) <= hour < _hhmm_to_hours(b.to_time):
             return True
     return False
+
+
+def resource_spans(session: Session) -> dict[int, set[int]]:
+    """resource id → ids of the resources it spans (see ResourceSpan)."""
+    spans: dict[int, set[int]] = {}
+    for row in session.exec(select(ResourceSpan)).all():
+        spans.setdefault(row.resource_id, set()).add(row.spans_id)
+    return spans
+
+
+def conflict_map(spans: dict[int, set[int]], resource_ids: Iterable[int]) -> dict[int, set[int]]:
+    """resource id → the other resources it may not run alongside: one spans the
+    other, or both span a common resource."""
+    ids = list(resource_ids)
+    out: dict[int, set[int]] = {rid: set() for rid in ids}
+    for a in ids:
+        sa = spans.get(a, set())
+        for b in ids:
+            if a == b:
+                continue
+            sb = spans.get(b, set())
+            if b in sa or a in sb or (sa & sb):
+                out[a].add(b)
+    return out
+
+
+def conflicting_resource_ids(session: Session, resource_id: int) -> set[int]:
+    ids = session.exec(select(Resource.id)).all()
+    return conflict_map(resource_spans(session), ids).get(resource_id, set())
+
+
+def spanning_resource_ids(session: Session, resource_id: int) -> set[int]:
+    """Resources that span `resource_id` — they take priority over it."""
+    return {rid for rid, spanned in resource_spans(session).items() if resource_id in spanned}
 
 
 def resource_schedule(
@@ -516,6 +550,15 @@ def reflow_schedule(session: Session) -> dict:
     for blk in session.exec(select(ResourceCalBlock)).all():
         blockouts_by_res.setdefault(blk.resource_id, []).extend(calblock_segments(blk))
 
+    # A task on a resource also occupies every resource that conflicts with it
+    # (spanning lanes), so the board never promises overlapping lane times.
+    conflicts = conflict_map(resource_spans(session), resources)
+
+    def occupy(rid: int, iv: Interval) -> None:
+        busy[rid].append(iv)
+        for other in conflicts.get(rid, ()):
+            busy[other].append(iv)
+
     # Immovable obstacles: in-flight/finished tasks and pinned todos hold their
     # slots so movable work routes around them. end_of seeds dependency
     # resolution for those same tasks.
@@ -528,7 +571,7 @@ def reflow_schedule(session: Session) -> dict:
         if t.status in FIXED or (t.status == TaskStatus.todo and t.pinned):
             for rid in res_by_task.get(t.id, []):
                 if rid in busy:
-                    busy[rid].append((t.start_date, t.end_date))
+                    occupy(rid, (t.start_date, t.end_date))
             end_of[t.id] = t.end_date
 
     def prio(t: Task) -> tuple[int, int, int, int]:
@@ -577,7 +620,7 @@ def reflow_schedule(session: Session) -> dict:
                 placed[t.id] = (slot, end)
                 end_of[t.id] = end
                 for r in rids:
-                    busy[r].append((slot, end))
+                    occupy(r, (slot, end))
             picked = t
             break
         if picked is None:

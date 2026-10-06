@@ -55,6 +55,24 @@ function kindField(selected = 'human', includeLabel = true) {
   </div>`;
 }
 
+// Lanes this resource is built from (e.g. GPU 0+1 spans GPU 0 and GPU 1).
+// Only resources that don't themselves span others can be spanned.
+function spansField(resources, selfId = null, selected = []) {
+  const options = resources.filter(r => r.id !== selfId && !(r.spans_ids || []).length);
+  if (!options.length) return '';
+  const boxes = options.map(r => `<label style="white-space:nowrap;font-size:0.85em">
+      <input type="checkbox" name="spans_ids" value="${r.id}"${selected.includes(r.id) ? ' checked' : ''}> ${escHtml(r.name)}
+    </label>`).join(' ');
+  return `<div><label title="Never runs at the same time as the lanes it spans">Spans</label>
+    <div style="display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">${boxes}</div>
+  </div>`;
+}
+
+function spansLabel(r, byId) {
+  const names = (r.spans_ids || []).map(id => byId[id]?.name || `#${id}`);
+  return names.length ? ` · spans ${names.join(', ')}` : '';
+}
+
 function collectDaysFromForm(form) {
   let mask = 0;
   DAY_VALUES.forEach((v, i) => {
@@ -70,6 +88,7 @@ function buildPayload(fd, form) {
     available_from: fd.get('available_from'),
     available_to:   fd.get('available_to'),
     available_days: collectDaysFromForm(form),
+    spans_ids: fd.getAll('spans_ids').map(Number),
   };
 }
 
@@ -284,6 +303,7 @@ async function showResourcesList(el, editingId = null) {
   const resources = await api.get('/resources/');
 
   const kindLabel = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
+  const byId = Object.fromEntries(resources.map(r => [r.id, r]));
 
   const rows = resources.map(r => {
     if (r.id === editingId) {
@@ -295,6 +315,7 @@ async function showResourcesList(el, editingId = null) {
             <div class="avail-fields">
               ${availabilityFields(r)}
             </div>
+            ${resources.some(o => (o.spans_ids || []).includes(r.id)) ? '' : spansField(resources, r.id, r.spans_ids || [])}
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
               <button type="button" class="btn btn-ghost cancel-resource-edit">Cancel</button>
@@ -306,7 +327,7 @@ async function showResourcesList(el, editingId = null) {
 
     return `<tr>
       <td><button class="btn btn-ghost view-resource-btn" data-id="${r.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(r.name)}</button></td>
-      <td>${escHtml(kindLabel[r.kind] || r.kind)}</td>
+      <td>${escHtml((kindLabel[r.kind] || r.kind) + spansLabel(r, byId))}</td>
       <td>${escHtml(availabilityLabel(r))}</td>
       <td style="text-align:right;white-space:nowrap">
         <a href="/api/resources/${r.id}/calendar.ics" title="Subscribe (iCal)"
@@ -329,6 +350,7 @@ async function showResourcesList(el, editingId = null) {
       <div class="avail-fields">
         ${availabilityFields()}
       </div>
+      ${spansField(resources)}
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ Add Resource</button>
       </div>
