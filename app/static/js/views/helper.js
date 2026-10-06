@@ -7,6 +7,16 @@ registerView('/helper', async (el) => {
     const all = await api.get('/resources/');
     computeResources = all.filter(r => r.kind === 'cpu' || r.kind === 'gpu');
   } catch (_) {}
+  // CPU before GPU; spanning lanes (e.g. GPU 0+1) after the lanes they span;
+  // then by name, numbers compared as numbers.
+  const kindOrder = { cpu: 0, gpu: 1 };
+  const spans = r => (r.spans_ids || []).length > 0 ? 1 : 0;
+  computeResources.sort((a, b) =>
+    (kindOrder[a.kind] - kindOrder[b.kind]) ||
+    (spans(a) - spans(b)) ||
+    a.name.localeCompare(b.name, undefined, { numeric: true })
+  );
+  const nameById = Object.fromEntries(computeResources.map(r => [r.id, r.name]));
 
   const apiUrl = window.location.origin;
   const pre = (code) =>
@@ -15,14 +25,14 @@ registerView('/helper', async (el) => {
   const resourceTable = computeResources.length === 0
     ? '<p style="color:var(--text-muted)">No cpu/gpu resources defined yet — add them in the Resources tab.</p>'
     : `<table style="margin-top:0.5rem">
-        <thead><tr><th>ID</th><th>Name</th><th>Kind</th><th>Capacity</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Kind</th><th>Spans</th></tr></thead>
         <tbody>
           ${computeResources.map(r => `
             <tr>
               <td><code style="font-size:1rem;font-weight:700">${escHtml(String(r.id))}</code></td>
               <td>${escHtml(r.name)}</td>
               <td>${escHtml(r.kind)}</td>
-              <td>${r.capacity != null ? escHtml(String(r.capacity)) + ' slots' : '—'}</td>
+              <td>${(r.spans_ids || []).length ? escHtml(r.spans_ids.map(id => nameById[id] || `#${id}`).join(', ')) : '—'}</td>
             </tr>`).join('')}
         </tbody>
       </table>`;
