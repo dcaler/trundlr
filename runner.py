@@ -91,6 +91,28 @@ def _resolve_workdir(raw_dir):
     return str(workdir), None
 
 
+# The server requires duration > 0; a sub-second task would otherwise round to 0.0.
+MIN_DURATION_H = 0.0001
+
+# The fields that end a task. If the full result PATCH is rejected, these are
+# resent alone so the task never stays in_progress over an optional field.
+_ESSENTIAL_FIELDS = ("status", "exit_code", "end_date")
+
+
+def _report_result(base_url: str, task_id: int, result: dict) -> None:
+    """PATCH a finished task's result, falling back to the essential fields."""
+    try:
+        _api(base_url, "PATCH", f"/tasks/{task_id}", result)
+        return
+    except Exception as e:
+        _log(f"Warning: PATCH failed: {e} — retrying with status only")
+    essential = {k: result[k] for k in _ESSENTIAL_FIELDS if k in result}
+    try:
+        _api(base_url, "PATCH", f"/tasks/{task_id}", essential)
+    except Exception as e:
+        _log(f"Warning: status-only PATCH failed: {e} — task {task_id} may stay in_progress")
+
+
 def _tail(path: Path, n: int) -> str:
     """Return the last n lines of a file as a single string."""
     try:
@@ -273,16 +295,13 @@ def main() -> None:
         _log(f"Task {task_id} → {status}  exit={exit_code}  duration={duration_h:.3f}h")
 
         # ── Write results back ─────────────────────────────────────────────
-        try:
-            _api(base_url, "PATCH", f"/tasks/{task_id}", {
-                "status": status,
-                "exit_code": exit_code,
-                "end_date": actual_end.strftime("%Y-%m-%dT%H:%M:%S"),
-                "duration": round(duration_h, 4),
-                "log_tail": tail,
-            })
-        except Exception as e:
-            _log(f"Warning: PATCH failed: {e}")
+        _report_result(base_url, task_id, {
+            "status": status,
+            "exit_code": exit_code,
+            "end_date": actual_end.strftime("%Y-%m-%dT%H:%M:%S"),
+            "duration": max(round(duration_h, 4), MIN_DURATION_H),
+            "log_tail": tail,
+        })
 
         # No sleep — immediately check for the next task.
 

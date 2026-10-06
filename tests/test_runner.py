@@ -56,3 +56,51 @@ def test_absolute_path_to_a_file_is_refused(tmp_path):
     project_dir, refusal = runner._resolve_workdir(str(f))
     assert project_dir is None
     assert "does not exist" in refusal  # is_dir() is False for a file
+
+
+# ── Result reporting ─────────────────────────────────────────────────────────
+
+def _fake_api(fail_first: int):
+    """An _api stand-in that raises on the first `fail_first` calls."""
+    calls = []
+
+    def api(base_url, method, path, body=None):
+        calls.append(body)
+        if len(calls) <= fail_first:
+            raise RuntimeError("API PATCH → HTTP 422")
+        return None, None
+
+    return api, calls
+
+
+_RESULT = {
+    "status": "failed", "exit_code": 1, "end_date": "2026-10-06T10:00:00",
+    "duration": 0.0001, "log_tail": "boom",
+}
+
+
+def test_report_result_sends_full_payload_once(monkeypatch):
+    api, calls = _fake_api(fail_first=0)
+    monkeypatch.setattr(runner, "_api", api)
+    runner._report_result("http://x", 7, _RESULT)
+    assert calls == [_RESULT]
+
+
+def test_report_result_falls_back_to_essential_fields(monkeypatch):
+    api, calls = _fake_api(fail_first=1)
+    monkeypatch.setattr(runner, "_api", api)
+    runner._report_result("http://x", 7, _RESULT)
+    assert calls[1] == {"status": "failed", "exit_code": 1, "end_date": "2026-10-06T10:00:00"}
+
+
+def test_report_result_survives_both_failures(monkeypatch):
+    api, calls = _fake_api(fail_first=2)
+    monkeypatch.setattr(runner, "_api", api)
+    runner._report_result("http://x", 7, _RESULT)  # must not raise
+    assert len(calls) == 2
+
+
+def test_sub_second_duration_is_accepted_by_server_schema():
+    from app.schemas import TaskUpdate
+    duration = max(round(0.15 / 3600, 4), runner.MIN_DURATION_H)
+    assert TaskUpdate(duration=duration).duration > 0
