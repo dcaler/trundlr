@@ -62,6 +62,20 @@ def _validate_time_str(value: str, field: str) -> None:
         raise ValueError(f"{field} is not a valid time")
 
 
+_ENV_LINE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+
+
+def _validate_runner_env(value: Optional[str]) -> Optional[str]:
+    """One KEY=value per line; blank lines dropped. Empty → None."""
+    if value is None:
+        return None
+    lines = [ln.strip() for ln in value.splitlines() if ln.strip()]
+    for ln in lines:
+        if not _ENV_LINE.fullmatch(ln):
+            raise ValueError(f"runner_env line is not KEY=value: {ln!r}")
+    return "\n".join(lines) or None
+
+
 class ResourceCreate(BaseModel):
     name: NonEmptyStr
     kind: ResourceKind
@@ -69,6 +83,12 @@ class ResourceCreate(BaseModel):
     available_to: str = "17:00"
     available_days: int = 31  # Mon-Fri bitmask
     spans_ids: list[BodyId] = []  # lanes this resource is built from (see ResourceSpan)
+    runner_env: Optional[str] = None
+
+    @field_validator("runner_env")
+    @classmethod
+    def check_runner_env(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_runner_env(v)
 
     @model_validator(mode="after")
     def validate_availability(self) -> "ResourceCreate":
@@ -90,6 +110,12 @@ class ResourceUpdate(BaseModel):
     available_to: Optional[str] = None
     available_days: Optional[int] = None
     spans_ids: Optional[list[BodyId]] = None
+    runner_env: Optional[str] = None
+
+    @field_validator("runner_env")
+    @classmethod
+    def check_runner_env(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_runner_env(v)
 
 
 class ResourceRead(BaseModel):
@@ -100,6 +126,7 @@ class ResourceRead(BaseModel):
     available_to: str
     available_days: int
     spans_ids: list[int] = []
+    runner_env: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -325,6 +352,8 @@ class SettingsRead(BaseModel):
     smtp_from: Optional[str] = None
     smtp_tls: bool = True
     smtp_password_set: bool = False  # never return the actual password
+    runner_folder: Optional[str] = None
+    lane_settle_minutes: int = 5
 
     model_config = {"from_attributes": True}
 
@@ -339,6 +368,8 @@ class SettingsUpdate(BaseModel):
     smtp_password: Optional[str] = None
     smtp_from: Optional[str] = None
     smtp_tls: Optional[bool] = None
+    runner_folder: Optional[str] = None
+    lane_settle_minutes: Optional[int] = Field(default=None, ge=0, le=120)
 
     @field_validator("timezone")
     @classmethod

@@ -280,3 +280,106 @@ def test_file_database_uses_wal_so_reads_pass_a_pending_write(tmp_path):
         # In the rollback journal this read would wait on the writer's lock.
         assert reader.execute(text("SELECT count(*) FROM t")).scalar() == 0
         writer.execute(text("COMMIT"))
+
+
+# ── Settle time between conflicting lanes ────────────────────────────────────
+
+def _finish(client, task_id, minutes_ago):
+    """Mark a task done as a runner would: status plus its actual end time."""
+    end = (datetime.now() - timedelta(minutes=minutes_ago)).replace(microsecond=0)
+    resp = client.patch(f"/api/tasks/{task_id}", json={
+        "status": "done", "start_date": (end - timedelta(hours=1)).isoformat(),
+        "end_date": end.isoformat(),
+    })
+    assert resp.status_code == 200
+
+
+def _settle(client, minutes):
+    assert client.patch("/api/settings/", json={"lane_settle_minutes": minutes}).status_code == 200
+
+
+def test_settle_time_defaults_to_five_minutes(client):
+    assert client.get("/api/settings/").json()["lane_settle_minutes"] == 5
+
+
+def test_dual_waits_for_settle_after_single_lane_task(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    a = _task(client, project_id, gpu0)
+    _finish(client, a, minutes_ago=1)
+    _task(client, project_id, dual)
+    resp = _claim(client, dual)
+    assert resp.status_code == 204
+    assert resp.headers["X-Runner-Idle"].startswith(f"settling:{gpu0}:until-")
+
+
+def test_single_lane_waits_for_settle_after_dual_task(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    d = _task(client, project_id, dual)
+    _finish(client, d, minutes_ago=1)
+    _task(client, project_id, gpu0)
+    assert _claim(client, gpu0).headers["X-Runner-Idle"].startswith(f"settling:{dual}:")
+
+
+def test_claims_once_settled(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    a = _task(client, project_id, gpu0)
+    _finish(client, a, minutes_ago=6)
+    _task(client, project_id, dual)
+    assert _claim(client, dual).status_code == 200
+
+
+def test_same_lane_and_parallel_lanes_never_settle(client, lanes, project_id):
+    gpu0, gpu1, _ = lanes
+    a = _task(client, project_id, gpu0)
+    _finish(client, a, minutes_ago=0)
+    _task(client, project_id, gpu0)
+    _task(client, project_id, gpu1)
+    assert _claim(client, gpu0).status_code == 200
+    assert _claim(client, gpu1).status_code == 200
+
+
+def test_settle_zero_disables(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    _settle(client, 0)
+    a = _task(client, project_id, gpu0)
+    _finish(client, a, minutes_ago=0)
+    _task(client, project_id, dual)
+    assert _claim(client, dual).status_code == 200
+
+
+def test_future_end_date_is_not_a_finish(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    a = _task(client, project_id, gpu0)
+    _finish(client, a, minutes_ago=-60)  # marked done by hand with its planned end
+    _task(client, project_id, dual)
+    assert _claim(client, dual).status_code == 200
+
+
+def test_settle_minutes_bounds(client):
+    assert client.patch("/api/settings/", json={"lane_settle_minutes": -1}).status_code == 422
+    assert client.patch("/api/settings/", json={"lane_settle_minutes": 121}).status_code == 422
+
+
+# ── Runner commands: env and folder ──────────────────────────────────────────
+
+def test_runner_env_round_trip_and_normalised(client):
+    resp = client.post("/api/resources/", json={
+        "name": "G", "kind": "gpu",
+        "runner_env": "OLLAMA_URL=http://localhost:11435\n\n  CUDA_VISIBLE_DEVICES=GPU-a,GPU-b  \n",
+    })
+    assert resp.status_code == 201
+    rid = resp.json()["id"]
+    assert resp.json()["runner_env"] == "OLLAMA_URL=http://localhost:11435\nCUDA_VISIBLE_DEVICES=GPU-a,GPU-b"
+    client.patch(f"/api/resources/{rid}", json={"runner_env": ""})
+    assert client.get(f"/api/resources/{rid}").json()["runner_env"] is None
+
+
+@pytest.mark.parametrize("bad", ["not an assignment", "1BAD=x", "=value", "A B=c"])
+def test_runner_env_rejects_non_assignments(client, bad):
+    resp = client.post("/api/resources/", json={"name": "G", "kind": "gpu", "runner_env": bad})
+    assert resp.status_code == 422
+
+
+def test_runner_folder_round_trip(client):
+    client.patch("/api/settings/", json={"runner_folder": "/srv/trundlr"})
+    assert client.get("/api/settings/").json()["runner_folder"] == "/srv/trundlr"

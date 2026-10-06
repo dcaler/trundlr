@@ -110,6 +110,9 @@ def apply_migrations(engine):
 
         result = conn.execute(text("PRAGMA table_info(resource)"))
         resource_cols = {row[1] for row in result}
+        if "runner_env" not in resource_cols:
+            conn.execute(text("ALTER TABLE resource ADD COLUMN runner_env TEXT"))
+            conn.commit()
         if "available_from" not in resource_cols:
             conn.execute(text("ALTER TABLE resource ADD COLUMN available_from TEXT"))
             conn.execute(text("ALTER TABLE resource ADD COLUMN available_to TEXT"))
@@ -230,6 +233,8 @@ def apply_migrations(engine):
             ("smtp_password", "TEXT"),
             ("smtp_from",     "TEXT"),
             ("smtp_tls",      "INTEGER NOT NULL DEFAULT 1"),
+            ("runner_folder", "TEXT"),
+            ("lane_settle_minutes", "INTEGER NOT NULL DEFAULT 5"),
         ]:
             if col not in appsettings_cols:
                 conn.execute(text(f"ALTER TABLE appsettings ADD COLUMN {col} {ddl}"))

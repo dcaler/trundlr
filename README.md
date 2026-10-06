@@ -130,7 +130,8 @@ Interactive docs (Swagger UI) are available at **`/docs`** when the app is runni
 
 `kind` must be one of `human`, `ai`, `cpu`, or `gpu`.  
 Availability defaults to `available_from`–`available_to` (`"09:00"`–`"17:00"`) on `available_days` (bitmask, bit 0 = Mon; default `31` = Mon–Fri). Per-day windows (`/{id}/windows`) replace that when present; blockouts (`/{id}/blockouts`) and CalDAV-painted blocks subtract from it.  
-`spans_ids` lists the lanes a resource is built from (e.g. a `GPU 0+1` lane spans `GPU 0` and `GPU 1`). Conflicting lanes never run at once: a runner won't claim while a conflicting lane has a task in progress, the lanes a resource spans stop claiming once its next task is due (`X-Runner-Idle: draining-for:<task>`), and reflow schedules them back to back.
+`spans_ids` lists the lanes a resource is built from (e.g. a `GPU 0+1` lane spans `GPU 0` and `GPU 1`). Conflicting lanes never run at once: a runner won't claim while a conflicting lane has a task in progress, the lanes a resource spans stop claiming once its next task is due (`X-Runner-Idle: draining-for:<task>`), and reflow schedules them back to back. After a task ends, conflicting lanes also wait `lane_settle_minutes` (Settings, default 5, `X-Runner-Idle: settling:…`) so the model it left loaded on the shared card can unload.  
+`runner_env` (one `KEY=value` per line) and the `runner_folder` setting fill in the Helper page's runner commands, e.g. a GPU lane's `OLLAMA_URL` and `CUDA_VISIBLE_DEVICES`.
 
 ### Tasks
 

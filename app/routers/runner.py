@@ -1,10 +1,10 @@
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import nullslast
+from sqlalchemy import func, nullslast
 from sqlmodel import Session, select
 
 from app.database import get_db
@@ -86,6 +86,31 @@ def _draining_for(session: Session, resource_id: int, now: datetime) -> Optional
     return None
 
 
+def _settling(session: Session, resource_id: int, now: datetime) -> Optional[tuple[int, datetime]]:
+    """(conflicting lane, settled-at) if a conflicting lane's task ended too recently.
+
+    Ollama keeps a model resident for minutes after a task (2 min on the dual
+    lane, 5 on the single lanes), so a lane sharing that card waits for it to
+    unload before starting. Same-lane work is never delayed.
+    """
+    settings = session.get(AppSettings, 1)
+    minutes = settings.lane_settle_minutes if settings else 5
+    if not minutes:
+        return None
+    gap = timedelta(minutes=minutes)
+    for cid in sorted(conflicting_resource_ids(session, resource_id)):
+        last_end = session.exec(
+            select(func.max(Task.end_date))
+            .join(TaskResource, Task.id == TaskResource.task_id)
+            .where(TaskResource.resource_id == cid)
+            .where(Task.status.in_([TaskStatus.done, TaskStatus.failed]))
+            .where(Task.end_date <= now)  # a future end is a plan, not a finish
+        ).one()
+        if last_end and last_end + gap > now:
+            return cid, last_end + gap
+    return None
+
+
 # Claims check other lanes before writing, so two runners claiming at once could
 # both pass the conflict check. The app runs as a single uvicorn process, so a
 # process lock makes check-and-claim atomic.
@@ -126,6 +151,12 @@ def _claim(resource_id: int, session: Session):
         if busy:
             return Response(status_code=204,
                             headers={"X-Runner-Idle": f"conflict-busy:{cid}:{busy.id}"})
+
+    settling = _settling(session, resource_id, now)
+    if settling:
+        cid, until = settling
+        return Response(status_code=204,
+                        headers={"X-Runner-Idle": f"settling:{cid}:until-{until:%H:%M}"})
 
     waiting = _draining_for(session, resource_id, now)
     if waiting:

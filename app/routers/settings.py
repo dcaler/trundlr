@@ -30,6 +30,8 @@ def _to_read(s: AppSettings) -> SettingsRead:
         smtp_from=s.smtp_from,
         smtp_tls=s.smtp_tls,
         smtp_password_set=bool(s.smtp_password),
+        runner_folder=s.runner_folder,
+        lane_settle_minutes=s.lane_settle_minutes,
     )
 
 

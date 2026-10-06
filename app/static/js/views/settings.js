@@ -60,6 +60,23 @@ registerView('/settings', async (el) => {
         </p>
       </div>
       <div>
+        <label style="display:block;margin-bottom:0.25rem">Runner folder</label>
+        <input name="runner_folder" value="${escHtml(settings.runner_folder || '')}"
+          placeholder="/path/to/folder/with/runner.py" style="width:100%">
+        <p style="margin:0.4rem 0 0;font-size:0.85em;color:var(--text-muted)">
+          Where runner.py lives on the compute server. Fills in the <code>cd</code> line of the Helper's commands.
+        </p>
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:0.25rem">Lane settle time (minutes)</label>
+        <input name="lane_settle_minutes" type="number" min="0" max="120"
+          value="${settings.lane_settle_minutes ?? 5}" style="width:6rem">
+        <p style="margin:0.4rem 0 0;font-size:0.85em;color:var(--text-muted)">
+          After a task ends, lanes that share its card(s) (see Spans on Resources) wait this long
+          before starting, so the model it left loaded can unload. 0 disables.
+        </p>
+      </div>
+      <div>
         <button type="submit" class="btn btn-primary">Save</button>
         <span id="settings-status" style="margin-left:0.75rem;font-size:0.9em;color:var(--text-muted)"></span>
       </div>
@@ -134,6 +151,8 @@ registerView('/settings', async (el) => {
       const updated = await api.patch('/settings/', {
         timezone: fd.get('timezone'),
         caldav_default_project_id: parseInt(fd.get('caldav_default_project_id')) || null,
+        runner_folder: (fd.get('runner_folder') || '').trim() || null,
+        lane_settle_minutes: parseInt(fd.get('lane_settle_minutes')) || 0,
       });
       appSettings = updated;
       statusEl.textContent = 'Saved.';

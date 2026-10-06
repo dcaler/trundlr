@@ -100,3 +100,23 @@ def test_session_context_manager(temp_db):
         found = session.exec(statement).first()
         assert found is not None
         assert found.name == "Context Manager Test"
+
+
+def test_migration_adds_runner_columns_to_old_db(temp_db):
+    """A database from before runner_env / runner_folder / lane_settle_minutes gains them."""
+    from sqlalchemy import text
+    from app.database import apply_migrations
+
+    engine = get_engine(temp_db)
+    create_db_and_tables(engine)
+    with engine.connect() as c:
+        c.execute(text("ALTER TABLE resource DROP COLUMN runner_env"))
+        c.execute(text("ALTER TABLE appsettings DROP COLUMN runner_folder"))
+        c.execute(text("ALTER TABLE appsettings DROP COLUMN lane_settle_minutes"))
+        c.commit()
+    apply_migrations(engine)
+    with engine.connect() as c:
+        res_cols = {r[1] for r in c.execute(text("PRAGMA table_info(resource)"))}
+        set_cols = {r[1] for r in c.execute(text("PRAGMA table_info(appsettings)"))}
+    assert "runner_env" in res_cols
+    assert {"runner_folder", "lane_settle_minutes"} <= set_cols

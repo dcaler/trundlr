@@ -3,9 +3,11 @@
 registerView('/helper', async (el) => {
   // Fetch cpu/gpu resources to show IDs
   let computeResources = [];
+  let runnerFolder = null;
   try {
-    const all = await api.get('/resources/');
+    const [all, settings] = await Promise.all([api.get('/resources/'), api.get('/settings/')]);
     computeResources = all.filter(r => r.kind === 'cpu' || r.kind === 'gpu');
+    runnerFolder = settings.runner_folder || null;
   } catch (_) {}
   // CPU before GPU; spanning lanes (e.g. GPU 0+1) after the lanes they span;
   // then by name, numbers compared as numbers.
@@ -37,28 +39,45 @@ registerView('/helper', async (el) => {
         </tbody>
       </table>`;
 
-  // Generate per-resource screen launch commands (two steps each)
+  // Quote a value for the shell only when it needs it.
+  const shQuote = v => /^[A-Za-z0-9_.,:\/@%+=-]*$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`;
+  const envLine = line => {
+    const eq = line.indexOf('=');
+    return `${line.slice(0, eq)}=${shQuote(line.slice(eq + 1))}`;
+  };
+
+  // Generate per-resource screen launch commands (two steps each). Every
+  // command is complete: it cds to the runner folder (Settings) and sets the
+  // resource's runner environment (Resources), one short line each so that
+  // copying from a narrow terminal doesn't wrap a value.
+  const cdLine = runnerFolder
+    ? `cd ${shQuote(runnerFolder)}`
+    : '# cd into the folder containing runner.py (set "Runner folder" in Settings to fill this in)';
   const screenCmds = computeResources.length === 0
     ? '# (no cpu/gpu resources defined yet)'
     : computeResources.map(r => {
-        const slug = escHtml(r.name.toLowerCase().replace(/\s+/g, '_'));
-        const name = escHtml(r.name);
-        const id   = escHtml(String(r.id));
-        const kind = escHtml(r.kind.toUpperCase());
-        return `# ${kind} — ${name} (resource ID ${id})
+        const slug = r.name.toLowerCase().replace(/\s+/g, '_');
+        const env = [
+          `RUNNER_RESOURCE_ID=${r.id}`,
+          `RUNNER_API_URL=${shQuote(apiUrl)}`,
+          ...(r.runner_env || '').split('\n').filter(Boolean).map(envLine),
+        ];
+        return `# ${r.kind.toUpperCase()} — ${r.name} (resource ID ${r.id})
 
 # 1. Start the screen session:
 screen -S trundlr_${slug}
 
 # 2. Inside the screen, run the runner (then Ctrl-A D to detach):
-RUNNER_RESOURCE_ID=${id} RUNNER_API_URL=${escHtml(apiUrl)} python3 runner.py 2>&1 | tee logs/runner-${slug}.log`;
+${cdLine}
+${env.join(' \\\n')} \\
+python3 runner.py 2>&1 | tee ${shQuote(`logs/runner-${slug}.log`)}`;
       }).join('\n\n');
 
   const attachCmds = computeResources.length === 0
     ? '# (no runners to attach to)'
     : computeResources.map(r => {
-        const slug = escHtml(r.name.toLowerCase().replace(/\s+/g, '_'));
-        return `screen -r trundlr_${slug}   # attach to ${escHtml(r.name)} runner`;
+        const slug = r.name.toLowerCase().replace(/\s+/g, '_');
+        return `screen -r trundlr_${slug}   # attach to ${r.name} runner`;
       }).join('\n');
 
   el.innerHTML = `
@@ -112,9 +131,10 @@ python3 --version   # must be 3.8 or later`)}
       Each <code>screen</code> session runs independently in the background and survives logout.
     </p>
     <p style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent, #888);border-radius:4px;padding:0.75rem 1rem;max-width:680px">
-      <strong>Where it runs:</strong> <code>cd</code> into the directory containing
-      <code>runner.py</code> before starting the screen session. The commands above use relative
-      paths from that directory. Per-task logs are written to its <code>logs/</code> subdirectory
+      <strong>Where it runs:</strong> each command first <code>cd</code>s into the directory
+      containing <code>runner.py</code> (the <strong>Runner folder</strong> in Settings), and adds
+      the resource's <strong>runner environment</strong> (set per resource on the Resources page,
+      e.g. <code>OLLAMA_URL</code> and <code>CUDA_VISIBLE_DEVICES</code> for a GPU lane). Per-task logs are written to its <code>logs/</code> subdirectory
       (<code>logs/task-{id}.log</code>) — never inside a project's working directory.
     </p>
     ${pre(screenCmds)}

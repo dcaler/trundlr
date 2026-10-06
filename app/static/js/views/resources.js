@@ -68,6 +68,14 @@ function spansField(resources, selfId = null, selected = []) {
   </div>`;
 }
 
+// Extra environment for this resource's runner, used by the Helper's commands.
+function runnerEnvField(r = null) {
+  return `<div><label title="One KEY=value per line, e.g. OLLAMA_URL=http://localhost:11435">Runner env</label>
+    <textarea name="runner_env" rows="2" placeholder="KEY=value per line"
+      style="width:260px;font-family:monospace;font-size:0.8em">${escHtml(r?.runner_env || '')}</textarea>
+  </div>`;
+}
+
 function spansLabel(r, byId) {
   const names = (r.spans_ids || []).map(id => byId[id]?.name || `#${id}`);
   return names.length ? ` · spans ${names.join(', ')}` : '';
@@ -89,6 +97,7 @@ function buildPayload(fd, form) {
     available_to:   fd.get('available_to'),
     available_days: collectDaysFromForm(form),
     spans_ids: fd.getAll('spans_ids').map(Number),
+    runner_env: fd.get('runner_env') || null,
   };
 }
 
@@ -316,6 +325,7 @@ async function showResourcesList(el, editingId = null) {
               ${availabilityFields(r)}
             </div>
             ${resources.some(o => (o.spans_ids || []).includes(r.id)) ? '' : spansField(resources, r.id, r.spans_ids || [])}
+            ${runnerEnvField(r)}
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
               <button type="button" class="btn btn-ghost cancel-resource-edit">Cancel</button>
@@ -351,6 +361,7 @@ async function showResourcesList(el, editingId = null) {
         ${availabilityFields()}
       </div>
       ${spansField(resources)}
+      ${runnerEnvField()}
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ Add Resource</button>
       </div>

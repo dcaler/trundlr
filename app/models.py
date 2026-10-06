@@ -46,6 +46,9 @@ class Resource(SQLModel, table=True):
     available_from: str = Field(default="09:00")   # "HH:MM"
     available_to: str = Field(default="17:00")     # "HH:MM"
     available_days: int = Field(default=31)        # Mon-Fri bitmask
+    # Extra environment for this resource's runner, one KEY=value per line
+    # (e.g. OLLAMA_URL, CUDA_VISIBLE_DEVICES). Shown in the Helper's commands.
+    runner_env: Optional[str] = Field(default=None)
 
 
 class ResourceSpan(SQLModel, table=True):
@@ -72,6 +75,11 @@ class AppSettings(SQLModel, table=True):
     smtp_password: Optional[str] = Field(default=None)
     smtp_from: Optional[str] = Field(default=None)
     smtp_tls: bool = Field(default=True)
+    # Runners
+    runner_folder: Optional[str] = Field(default=None)  # where runner.py lives on the compute server
+    # Minutes a lane waits after a conflicting lane's task ends before claiming,
+    # so ollama on the shared card(s) can unload its model. 0 disables.
+    lane_settle_minutes: int = Field(default=5)
 
 
 class Task(SQLModel, table=True):
