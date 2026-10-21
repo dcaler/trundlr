@@ -8,32 +8,13 @@ from sqlmodel import Session, select
 from app.database import get_db
 from app.email import send_notification
 from app.models import AppSettings, Project, Resource, Task, TaskResource, TaskStatus
-from app.scheduling import reflow_schedule
+from app.reflow import project_names, run_reflow
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 from app.validation import DBId, OptionalDBIdQuery
 
 
-def _project_names(session: Session, project_ids) -> list[str]:
-    """Distinct project names for the given ids, in first-seen order."""
-    names = []
-    for pid in dict.fromkeys(project_ids):
-        proj = session.get(Project, pid)
-        names.append(proj.name if proj else f"project {pid}")
-    return names
-
-
 def _reflow(session: Session) -> None:
-    result = reflow_schedule(session)
-    session.commit()
-    if result.get("unscheduled"):
-        items = [t for t in result["unscheduled"] if t.get("reason") != "blocked by an unscheduled dependency"]
-        if items:
-            lines = "\n".join(f"  • {t['title']}: {t['reason']}" for t in items)
-            affected = [session.get(Task, t["id"]) for t in items]
-            projects = _project_names(session, [t.project_id for t in affected if t])
-            send_notification(session, "Tasks could not be scheduled",
-                              f"{len(items)} task(s) could not be scheduled:\n{lines}",
-                              projects=projects)
+    run_reflow(session)
 
 
 def _notify_status(session: Session, task: Task) -> None:
@@ -190,6 +171,9 @@ def update_task(
     session.commit()
     if "status" in updates:
         _notify_status(session, task)
+        # A task finishing early or late shifts everything planned after it.
+        if task.status in (TaskStatus.done, TaskStatus.failed):
+            _reflow(session)
     session.refresh(task)
     return _task_read(task, session)
 
@@ -211,7 +195,7 @@ def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
         session.add(dep)
 
     # Resolve names before the delete, while the rows are still loadable.
-    blocked_projects = _project_names(session, [d.project_id for d in dependents])
+    blocked_projects = project_names(session, [d.project_id for d in dependents])
 
     _set_resources(task_id, [], session)
     session.flush()  # clear FK references before deleting the task

@@ -77,6 +77,15 @@ registerView('/settings', async (el) => {
         </p>
       </div>
       <div>
+        <label style="display:block;margin-bottom:0.25rem">Auto re-flow (minutes)</label>
+        <input name="auto_reflow_minutes" type="number" min="0" max="1440"
+          value="${settings.auto_reflow_minutes ?? 60}" style="width:6rem">
+        <p style="margin:0.4rem 0 0;font-size:0.85em;color:var(--text-muted)">
+          Re-flow the whole board this often in the background. Tasks also re-flow when one finishes.
+          Unpinned todo tasks get new times, so pin any you've timed by hand. 0 disables.
+        </p>
+      </div>
+      <div>
         <button type="submit" class="btn btn-primary">Save</button>
         <span id="settings-status" style="margin-left:0.75rem;font-size:0.9em;color:var(--text-muted)"></span>
       </div>
@@ -153,6 +162,7 @@ registerView('/settings', async (el) => {
         caldav_default_project_id: parseInt(fd.get('caldav_default_project_id')) || null,
         runner_folder: (fd.get('runner_folder') || '').trim() || null,
         lane_settle_minutes: parseInt(fd.get('lane_settle_minutes')) || 0,
+        auto_reflow_minutes: parseInt(fd.get('auto_reflow_minutes')) || 0,
       });
       appSettings = updated;
       statusEl.textContent = 'Saved.';

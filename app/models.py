@@ -80,6 +80,8 @@ class AppSettings(SQLModel, table=True):
     # Minutes a lane waits after a conflicting lane's task ends before claiming,
     # so ollama on the shared card(s) can unload its model. 0 disables.
     lane_settle_minutes: int = Field(default=5)
+    # Re-flow the whole board this often, in the background. 0 disables.
+    auto_reflow_minutes: int = Field(default=60)
 
 
 class Task(SQLModel, table=True):

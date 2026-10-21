@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import math
 import os
@@ -35,6 +36,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from app.database import apply_migrations, create_db_and_tables, init_engine
+from app.reflow import auto_reflow_loop
 from app.routers import projects, resources, schedule, settings, tasks
 from app.routers import caldav, cycles, runner
 
@@ -65,7 +67,9 @@ async def lifespan(app: FastAPI):
     engine = init_engine(database_url)
     create_db_and_tables(engine)
     apply_migrations(engine)
+    auto_reflow = asyncio.create_task(auto_reflow_loop(engine))
     yield
+    auto_reflow.cancel()
 
 
 app = FastAPI(lifespan=lifespan)

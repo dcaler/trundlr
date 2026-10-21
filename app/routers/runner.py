@@ -1,4 +1,3 @@
-import threading
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -9,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.database import get_db
 from app.models import AppSettings, Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
+from app.reflow import SCHEDULE_LOCK
 from app.scheduling import conflicting_resource_ids, is_blocked_at, spanning_resource_ids
 from app.schemas import RunnerClaimRead
 from app.validation import DBId
@@ -113,8 +113,8 @@ def _settling(session: Session, resource_id: int, now: datetime) -> Optional[tup
 
 # Claims check other lanes before writing, so two runners claiming at once could
 # both pass the conflict check. The app runs as a single uvicorn process, so a
-# process lock makes check-and-claim atomic.
-_claim_lock = threading.Lock()
+# process lock makes check-and-claim atomic; it is shared with re-flows, which
+# would otherwise overwrite a just-claimed task's start time.
 
 
 @router.post("/{resource_id}/claim")
@@ -125,7 +125,7 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     with the reason in an X-Runner-Idle header. Sets the task status to
     in_progress and records the actual start time.
     """
-    with _claim_lock:
+    with SCHEDULE_LOCK:
         return _claim(resource_id, session)
 
 

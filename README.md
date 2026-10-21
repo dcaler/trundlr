@@ -146,7 +146,7 @@ Availability defaults to `available_from`–`available_to` (`"09:00"`–`"17:00"
 `status` values: `todo`, `in_progress`, `paused`, `blocked`, `done`, `failed`.  
 `duration` is total hours; `start_date`/`end_date` are datetimes and `end_date` must not be before `start_date`.  
 Assign resources with `resource_ids` (a task may have several); set a predecessor with `depends_on_id`.  
-`POST /api/schedule/reflow` re-places all unpinned `todo` tasks by project priority and dependencies.
+`POST /api/schedule/reflow` re-places all unpinned `todo` tasks by project priority and dependencies. The board also re-flows when a task is created, deleted or finished, and every `auto_reflow_minutes` (Settings, default 60). A running task past its planned end is treated as needing at least another hour, so the plan never assumes it has finished. Pin a task to keep a hand-set time.
 
 ### Schedule & utilization
 

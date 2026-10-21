@@ -235,6 +235,7 @@ def apply_migrations(engine):
             ("smtp_tls",      "INTEGER NOT NULL DEFAULT 1"),
             ("runner_folder", "TEXT"),
             ("lane_settle_minutes", "INTEGER NOT NULL DEFAULT 5"),
+            ("auto_reflow_minutes", "INTEGER NOT NULL DEFAULT 60"),
         ]:
             if col not in appsettings_cols:
                 conn.execute(text(f"ALTER TABLE appsettings ADD COLUMN {col} {ddl}"))

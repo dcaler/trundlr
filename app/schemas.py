@@ -354,6 +354,7 @@ class SettingsRead(BaseModel):
     smtp_password_set: bool = False  # never return the actual password
     runner_folder: Optional[str] = None
     lane_settle_minutes: int = 5
+    auto_reflow_minutes: int = 60
 
     model_config = {"from_attributes": True}
 
@@ -370,6 +371,7 @@ class SettingsUpdate(BaseModel):
     smtp_tls: Optional[bool] = None
     runner_folder: Optional[str] = None
     lane_settle_minutes: Optional[int] = Field(default=None, ge=0, le=120)
+    auto_reflow_minutes: Optional[int] = Field(default=None, ge=0, le=1440)
 
     @field_validator("timezone")
     @classmethod

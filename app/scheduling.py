@@ -28,6 +28,11 @@ _EPS = 1e-6  # tolerance for float hour comparisons
 # stamped with a bogus far-future date (the failure mode of the reverted rework).
 SCHED_HORIZON_DAYS = 365
 
+# A running task past its planned end is assumed to need at least this much
+# longer. Each re-flow pushes its end out again, so lanes waiting on it keep
+# seeing it as busy instead of planning around an end that already passed.
+OVERRUN_MARGIN = timedelta(hours=1)
+
 
 @dataclass(frozen=True)
 class DayUtilization:
@@ -559,6 +564,15 @@ def reflow_schedule(session: Session) -> dict:
         for other in conflicts.get(rid, ()):
             busy[other].append(iv)
 
+    # Overrunning tasks: stretch their planned end to now + OVERRUN_MARGIN.
+    stretched = 0
+    for t in tasks:
+        if (t.status in (TaskStatus.in_progress, TaskStatus.paused)
+                and t.start_date and t.end_date and t.end_date < now):
+            t.end_date = now + OVERRUN_MARGIN
+            session.add(t)
+            stretched += 1
+
     # Immovable obstacles: in-flight/finished tasks and pinned todos hold their
     # slots so movable work routes around them. end_of seeds dependency
     # resolution for those same tasks.
@@ -637,7 +651,7 @@ def reflow_schedule(session: Session) -> dict:
         unscheduled.append({"id": t.id, "title": t.title, "reason": reason})
 
     # Apply: write moved tasks, strip blocked tasks' dates, leave the rest alone.
-    changed = 0
+    changed = stretched
     for tid, (start, end) in placed.items():
         t = tasks_by_id[tid]
         if t.start_date is None or abs((start - t.start_date).total_seconds()) >= 60:

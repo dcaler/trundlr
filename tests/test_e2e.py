@@ -352,6 +352,12 @@ class TestFullScenario:
     # ── Stage 7: task lifecycle transitions ──────────────────────────────────
 
     def test_26_status_transitions(self, client):
+        # Finishing a task re-flows the board, which re-times unpinned todo
+        # tasks; pin the hand-dated ones the later stages measure.
+        for tid in (TestFullScenario._task_train_a_id, TestFullScenario._task_analysis_id,
+                    TestFullScenario._task_train_b_id, TestFullScenario._task_emerg_id,
+                    TestFullScenario._task_eval_id):
+            assert client.patch(f"/api/tasks/{tid}", json={"pinned": True}).status_code == 200
         task_id = TestFullScenario._task_data_id
         for status in ("in_progress", "blocked", "done"):
             resp = client.patch(f"/api/tasks/{task_id}", json={"status": status})
