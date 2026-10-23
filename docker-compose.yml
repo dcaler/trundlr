@@ -2,6 +2,7 @@ services:
   app:
     build: .
     container_name: trundlr-app
+    restart: unless-stopped
     ports:
       - "${PORT:-8251}:8251"
     environment:
