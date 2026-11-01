@@ -23,7 +23,7 @@ def _notify_status(session: Session, task: Task) -> None:
     proj = session.get(Project, task.project_id)
     proj_name = proj.name if proj else f"project {task.project_id}"
     status_str = task.status.value.upper()
-    lines = [f"Task: {task.title}", f"Project: {proj_name}", f"Status: {status_str}"]
+    lines = [f"Task: #{task.id} {task.title}", f"Project: {proj_name}", f"Status: {status_str}"]
     if task.duration is not None:
         lines.append(f"Duration: {task.duration:.2f}h")
     if task.exit_code is not None:
@@ -31,7 +31,7 @@ def _notify_status(session: Session, task: Task) -> None:
     if task.log_tail:
         snippet = "\n".join(task.log_tail.splitlines()[-10:])
         lines.append(f"\nLog (last 10 lines):\n{snippet}")
-    send_notification(session, f"{status_str}: {task.title}", "\n".join(lines),
+    send_notification(session, f"{status_str}: #{task.id} {task.title}", "\n".join(lines),
                       projects=[proj_name])
 
 
@@ -161,6 +161,15 @@ def update_task(
     for key, value in updates.items():
         setattr(task, key, value)
 
+    # A runner's result carries the actual end but not the actual start. If the
+    # start moved after the claim (e.g. a calendar client saved a stale copy of
+    # the event), that end can fall before it; rejecting the result would leave
+    # the task in_progress and block its lane, so back the start out of it.
+    if (task.status in (TaskStatus.done, TaskStatus.failed)
+            and "end_date" in updates and "start_date" not in updates
+            and task.start_date and task.end_date and task.end_date < task.start_date):
+        task.start_date = task.end_date - timedelta(hours=updates.get("duration") or 0)
+
     if task.end_date is not None and task.start_date is not None:
         if task.end_date < task.start_date:
             raise HTTPException(
@@ -204,8 +213,8 @@ def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     if dependents:
         titles = ", ".join(d.title for d in dependents)
         send_notification(session, "Tasks blocked — dependency deleted",
-                          f"'{task.title}' was deleted.\n\nThe following tasks are now blocked:\n"
-                          + "\n".join(f"  • {d.title}" for d in dependents),
+                          f"#{task.id} '{task.title}' was deleted.\n\nThe following tasks are now blocked:\n"
+                          + "\n".join(f"  • #{d.id} {d.title}" for d in dependents),
                           projects=blocked_projects)
     _reflow(session)
 

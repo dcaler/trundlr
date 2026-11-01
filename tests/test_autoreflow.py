@@ -289,3 +289,35 @@ def test_age_priority_defaults_to_a_week(client):
 @pytest.mark.parametrize("bad", [-1, 366])
 def test_age_priority_bounds(client, bad):
     assert client.patch("/api/settings/", json={"age_priority_days": bad}).status_code == 422
+
+
+# ── Task numbers in emails (task 1106) ───────────────────────────────────────
+
+def test_emails_carry_task_numbers(client, project_id, monkeypatch):
+    import app.routers.tasks as tasks_router
+    sent = []
+
+    def capture(_session, subject, body, **_):
+        sent.append((subject, body))
+
+    monkeypatch.setattr(reflow, "send_notification", capture)
+    monkeypatch.setattr(tasks_router, "send_notification", capture)
+    gpu = _gpu(client, "GPU")
+
+    done = _task(client, project_id, gpu)
+    client.patch(f"/api/tasks/{done}", json={"status": "done"})
+    subject, body = sent[-1]
+    assert subject == f"DONE: #{done} t" and f"Task: #{done} t" in body
+
+    up = _task(client, project_id, gpu)
+    down = _task(client, project_id, gpu, depends_on_id=up)
+    client.delete(f"/api/tasks/{up}")
+    subject, body = sent[-1]
+    assert f"#{up} 't' was deleted" in body and f"• #{down} t" in body
+
+    far = {"start_date": date.today().isoformat(),
+           "end_date": (date.today() + timedelta(days=400)).isoformat()}
+    client.post(f"/api/resources/{gpu}/blockouts", json=far)
+    stuck = _task(client, project_id, gpu)
+    subject, body = sent[-1]
+    assert subject == "Tasks could not be scheduled" and f"• #{stuck} t:" in body

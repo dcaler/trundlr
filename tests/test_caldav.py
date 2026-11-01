@@ -450,6 +450,29 @@ def test_put_resizing_event_pins_the_task(client):
     assert refreshed["start_date"] == "2026-07-23T14:00:00"
 
 
+def test_put_leaves_a_running_tasks_times_alone(client):
+    """A client saving a stale copy must not move what actually happened."""
+    project = client.post("/api/projects/", json={"name": "P"}).json()
+    rid = client.post("/api/resources/", json=HUMAN).json()["id"]
+    task = client.post("/api/tasks/", json={
+        "title": "T", "project_id": project["id"], "resource_ids": [rid],
+        "start_date": "2026-07-23T10:20:00", "end_date": "2026-07-23T12:20:00",
+    }).json()
+    client.patch(f"/api/tasks/{task['id']}", json={"status": "in_progress"})
+
+    uid = f"task-{task['id']}@trundlr"
+    resp = client.put(
+        f"/caldav/calendars/{rid}/task-{task['id']}@trundlr.ics",
+        content=_event_ical(uid, "20260723T140000", "20260723T160000", summary="Renamed"),
+    )
+    assert resp.status_code == 204, resp.text
+
+    refreshed = client.get(f"/api/tasks/{task['id']}").json()
+    assert refreshed["start_date"] == "2026-07-23T10:20:00"
+    assert refreshed["pinned"] is False
+    assert refreshed["title"] == "Renamed"
+
+
 # ── "Project: Title" summaries route the task to that project ────────────────
 
 def test_summary_prefix_selects_the_project(client):

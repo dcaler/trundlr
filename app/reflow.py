@@ -51,7 +51,7 @@ def _notify_unschedulable(session: Session, result: dict) -> None:
     _last_notified = key
     if not items:
         return
-    lines = "\n".join(f"  • {t['title']}: {t['reason']}" for t in items)
+    lines = "\n".join(f"  • #{t['id']} {t['title']}: {t['reason']}" for t in items)
     affected = [session.get(Task, t["id"]) for t in items]
     projects = project_names(session, [t.project_id for t in affected if t])
     send_notification(session, "Tasks could not be scheduled",

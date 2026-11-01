@@ -540,3 +540,43 @@ def test_a_failed_reflow_does_not_fail_the_claim(client, project_id, monkeypatch
     resp = _claim(client, gpu)
     assert resp.status_code == 200 and resp.json()["id"] == t
     assert client.get(f"/api/tasks/{t}").json()["status"] == "in_progress"
+
+
+# ── Runner results after the start moved (task 1170) ─────────────────────────
+
+def _stale_start(client, gpu, project_id):
+    """A claimed task whose start a calendar client then moved past its real end."""
+    t = _task(client, project_id, gpu)
+    assert _claim(client, gpu).json()["id"] == t
+    later = (_utcnow() + timedelta(hours=3)).isoformat()
+    client.patch(f"/api/tasks/{t}", json={"start_date": later})
+    return t
+
+
+def test_a_result_ending_before_a_moved_start_is_accepted(client, project_id):
+    gpu = _gpu(client, "GPU")
+    t = _stale_start(client, gpu, project_id)
+    end = _utcnow()
+    resp = client.patch(f"/api/tasks/{t}", json={
+        "status": "done", "exit_code": 0, "end_date": end.isoformat(), "duration": 0.5})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "done"
+    assert _start(client, t) == end - timedelta(minutes=30)
+
+
+def test_the_runners_status_only_fallback_is_accepted_too(client, project_id):
+    gpu = _gpu(client, "GPU")
+    t = _stale_start(client, gpu, project_id)
+    end = _utcnow()
+    resp = client.patch(f"/api/tasks/{t}", json={
+        "status": "failed", "exit_code": 1, "end_date": end.isoformat()})
+    assert resp.status_code == 200, resp.text
+    assert _start(client, t) == end
+
+
+def test_an_ordinary_edit_ending_before_its_start_is_still_refused(client, project_id):
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    resp = client.patch(f"/api/tasks/{t}", json={
+        "start_date": "2026-07-01T10:00:00", "end_date": "2026-07-01T09:00:00"})
+    assert resp.status_code == 422
