@@ -140,3 +140,41 @@ def test_migration_adds_scheduler_columns_to_old_db(temp_db):
         set_cols = {r[1] for r in c.execute(text("PRAGMA table_info(appsettings)"))}
     assert {"eligible_since", "drain_since"} <= task_cols
     assert "age_priority_days" in set_cols
+
+
+def test_migration_backdates_eligible_since(temp_db):
+    """Ready todo tasks get a lower bound on how long they've waited: the earliest
+    run of any later-created task, or their dependency's finish if later."""
+    from datetime import datetime
+    from sqlalchemy import text
+    from app.database import apply_migrations
+    from app.models import Project, Task, TaskStatus
+
+    engine = get_engine(temp_db)
+    create_db_and_tables(engine)
+    d = datetime
+    with Session(engine) as s:
+        s.add(Project(id=1, name="P"))
+        s.add_all([
+            Task(id=1, title="old todo", project_id=1),
+            Task(id=2, title="dep", project_id=1, status=TaskStatus.done,
+                 start_date=d(2026, 10, 1, 9), end_date=d(2026, 10, 3, 9)),
+            Task(id=3, title="after dep", project_id=1, depends_on_id=2),
+            Task(id=5, title="ran", project_id=1, status=TaskStatus.in_progress,
+                 start_date=d(2026, 10, 2, 9), end_date=d(2026, 10, 9, 9)),
+            Task(id=6, title="newest todo", project_id=1),
+        ])
+        s.commit()
+        s.add(Task(id=4, title="waits", project_id=1, depends_on_id=5))
+        s.commit()
+    with engine.connect() as c:
+        c.execute(text("ALTER TABLE task DROP COLUMN eligible_since"))
+        c.commit()
+    apply_migrations(engine)
+    with Session(engine) as s:
+        got = {t.id: t.eligible_since for t in s.exec(select(Task)).all()}
+    assert got[1] == d(2026, 10, 1, 9)    # task 2 ran on the 1st, so 1 existed by then
+    assert got[3] == d(2026, 10, 3, 9)    # bound is the 2nd, but its dependency finished on the 3rd
+    assert got[4] is None                 # dependency still running
+    assert got[6] is None                 # nothing later has run: re-flow stamps it
+    assert got[2] is None and got[5] is None

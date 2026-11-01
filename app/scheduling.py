@@ -588,7 +588,9 @@ def reflow_schedule(session: Session) -> dict:
         ready = t.status == TaskStatus.todo and (
             t.depends_on_id is None or (dep is not None and dep.status == TaskStatus.done))
         if ready and t.eligible_since is None:
-            t.eligible_since = now
+            # Ready since its dependency finished, if that's known and past.
+            finished = dep.end_date if dep is not None else None
+            t.eligible_since = finished if finished and finished <= now else now
             session.add(t)
         elif not ready and t.eligible_since is not None:
             t.eligible_since = None
@@ -620,10 +622,14 @@ def reflow_schedule(session: Session) -> dict:
         # placed first, at the earliest time all those lanes are free, so new
         # single-lane work can't push it back (see runner._draining_for).
         reserved = 0 if t.drain_since else 1
-        # Age priority: one project-priority level per age_days ready, capped.
-        level = p.priority if p else 3
+        # Age priority: one project-priority level per age_days ready, capped,
+        # and never above Critical (1). The project's own priority still breaks
+        # ties, so an aged task lifted to a level sorts after work born there.
+        base = p.priority if p else 3
+        level = base
         if age_days and t.eligible_since:
-            level -= min(MAX_AGE_LEVELS, (now - t.eligible_since) // timedelta(days=age_days))
+            lift = min(MAX_AGE_LEVELS, (now - t.eligible_since) // timedelta(days=age_days))
+            level = max(1, base - lift)
         # Size priority: a spanning-lane task needs every lane it spans free at
         # once, so it goes ahead of same-priority single-lane work.
         single = 0 if on_spanning_lane(t) else 1
@@ -631,7 +637,7 @@ def reflow_schedule(session: Session) -> dict:
         # (but never ahead of a higher-priority project) — identified by the
         # title convention the Projects page's "+ Bug Fix" quick-add uses.
         is_bugfix = 0 if t.title.strip().lower().startswith("bug fix") else 1
-        return (reserved, level, single, t.project_id, is_bugfix, t.id)
+        return (reserved, level, single, base, t.project_id, is_bugfix, t.id)
 
     # Movable: unpinned todos with at least one resource. (Resource-less tasks
     # can't occupy a timeline; like the previous scheduler, they're left alone.)

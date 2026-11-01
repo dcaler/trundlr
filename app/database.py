@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Generator, Optional
 
 from sqlalchemy import event, text
@@ -272,7 +273,50 @@ def apply_migrations(engine):
         for col in ("eligible_since", "drain_since"):
             if col not in task_cols2:
                 conn.execute(text(f"ALTER TABLE task ADD COLUMN {col} DATETIME"))
+        if "eligible_since" not in task_cols2:
+            _backfill_eligible_since(conn)
         conn.commit()
+
+
+def _backfill_eligible_since(conn) -> None:
+    """Estimate how long each ready todo task has already waited, so age
+    priority applies from the first re-flow rather than a week later.
+
+    Tasks have no creation time, but ids only grow and a claimed task's
+    start_date is when it actually ran. So a task was created no later than the
+    earliest start of any higher-id task that has run: a lower bound on its
+    wait. If its dependency finished later than that, it was ready from then.
+    Tasks with no such bound are left for re-flow to stamp with the current time.
+    """
+    rows = conn.execute(text(
+        "SELECT id, status, depends_on_id, start_date, end_date FROM task ORDER BY id"
+    )).all()
+    by_id = {r.id: r for r in rows}
+
+    def ts(value):
+        return datetime.fromisoformat(value) if isinstance(value, str) else value
+
+    started_after: dict[int, datetime] = {}  # id → earliest run start among higher ids
+    earliest = None
+    for r in reversed(rows):
+        if earliest is not None:
+            started_after[r.id] = earliest
+        if r.status in ("in_progress", "paused", "done", "failed") and r.start_date:
+            start = ts(r.start_date)
+            earliest = start if earliest is None else min(earliest, start)
+
+    for r in rows:
+        if r.status != "todo" or r.id not in started_after:
+            continue
+        since = started_after[r.id]
+        if r.depends_on_id is not None:
+            dep = by_id.get(r.depends_on_id)
+            if dep is None or dep.status != "done":
+                continue
+            if dep.end_date:
+                since = max(since, ts(dep.end_date))
+        conn.execute(text("UPDATE task SET eligible_since = :s WHERE id = :id"),
+                     {"s": since.isoformat(sep=" "), "id": r.id})
 
 
 def get_session(engine) -> Generator[Session, None, None]:

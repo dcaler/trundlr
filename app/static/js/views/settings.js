@@ -91,7 +91,7 @@ registerView('/settings', async (el) => {
           value="${settings.age_priority_days ?? 7}" style="width:6rem">
         <p style="margin:0.4rem 0 0;font-size:0.85em;color:var(--text-muted)">
           A task that has been ready to run this many days is planned as if its project were one
-          priority level higher (up to three levels), so nothing waits forever. 0 disables.
+          priority level higher (up to three levels, never above Critical), so nothing waits forever. 0 disables.
         </p>
       </div>
       <div>

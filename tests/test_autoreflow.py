@@ -263,6 +263,17 @@ def test_a_long_wait_lifts_a_low_priority_task(client, session):
     assert _get(client, old)["start_date"] < _get(client, new)["start_date"]
 
 
+def test_an_aged_task_does_not_outrank_work_born_at_its_new_level(client, session):
+    gpu = _gpu(client, "GPU")
+    low = client.post("/api/projects/", json={"name": "Low", "priority": 4}).json()["id"]
+    crit = client.post("/api/projects/", json={"name": "Critical", "priority": 1}).json()["id"]
+    old = _task(client, low, gpu, duration=1)
+    urgent = _task(client, crit, gpu, duration=1)
+    _age(session, old, 10 ** 4)  # lifted to Critical, no further
+    client.post("/api/schedule/reflow")
+    assert _get(client, urgent)["start_date"] < _get(client, old)["start_date"]
+
+
 def test_age_priority_is_capped_and_can_be_disabled(client, session):
     old, new = _two_priorities(client)
     _age(session, old, 10 ** 4)
