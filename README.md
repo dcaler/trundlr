@@ -91,6 +91,14 @@ docker compose down
 docker compose down -v
 ```
 
+**Backups.** Once a day the app snapshots the database to `backups/` next to it (`/app/data/backups/trundlr-YYYYMMDD-HHMMSS.db` in the container), keeping the newest three. The first check runs ten minutes after start, then hourly. Snapshots share the data volume, so they cover a bad edit or a corrupt file, not a lost disk; copy one off the host for that:
+
+```bash
+docker cp trundlr-app:/app/data/backups ./trundlr-backups
+```
+
+To restore, stop the app, copy a snapshot over `/app/data/trundlr.db` in the volume, and start it again.
+
 ---
 
 ## Web interface

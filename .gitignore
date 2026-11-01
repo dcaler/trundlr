@@ -30,6 +30,7 @@ env.bak/
 venv.bak/
 .DS_Store
 *.db
+backups/
 db.sqlite3
 .idea/
 .vscode/

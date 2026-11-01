@@ -35,6 +35,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.backup import backup_loop
 from app.database import apply_migrations, create_db_and_tables, init_engine
 from app.reflow import auto_reflow_loop
 from app.routers import projects, resources, schedule, settings, tasks
@@ -68,8 +69,10 @@ async def lifespan(app: FastAPI):
     create_db_and_tables(engine)
     apply_migrations(engine)
     auto_reflow = asyncio.create_task(auto_reflow_loop(engine))
+    backups = asyncio.create_task(backup_loop(database_url))
     yield
     auto_reflow.cancel()
+    backups.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
