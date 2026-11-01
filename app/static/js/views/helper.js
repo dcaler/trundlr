@@ -172,11 +172,11 @@ python3 --version   # must be 3.8 or later`)}
 
     <h2>How it works</h2>
     <ol style="line-height:1.9;max-width:640px;color:var(--text-muted)">
-      <li>On startup the runner resets any tasks left <code>in_progress</code> from a previous crashed run to <code>failed</code>.</li>
+      <li>On startup the runner resets any tasks left <code>in_progress</code> from a previous crashed run to <code>error</code>.</li>
       <li>It polls <code>POST /api/runner/{id}/claim</code> to atomically grab the next <code>todo</code> task, ordered by project priority then scheduled start time.</li>
-      <li>The task's <strong>Command</strong> is run via the shell in the project's <strong>Directory</strong> (both set in the Projects tab). The Directory <strong>must be an absolute path that already exists</strong> on the runner — the runner refuses to run (marks the task <code>failed</code>) and never creates the directory, so a command can never execute in an unintended location.</li>
+      <li>The task's <strong>Command</strong> is run via the shell in the project's <strong>Directory</strong> (both set in the Projects tab). The Directory <strong>must be an absolute path that already exists</strong> on the runner — the runner refuses to run (marks the task <code>error</code>) and never creates the directory, so a command can never execute in an unintended location.</li>
       <li>stdout + stderr are written to <code>logs/task-{id}.log</code> inside the Trundlr directory (default <code>&lt;trundlr&gt;/logs/</code>, configurable via <code>RUNNER_LOG_DIR</code>) — never inside the working directory.</li>
-      <li>On completion: status → <code>done</code> or <code>failed</code>, exit code, duration, and the last 100 lines of output are written back to Trundlr and visible in the task detail panel.</li>
+      <li>On completion: status → <code>done</code> or <code>error</code> (it stays on the board until you set it to <code>failed</code>), exit code, duration, and the last 100 lines of output are written back to Trundlr and visible in the task detail panel.</li>
     </ol>
   `;
 });

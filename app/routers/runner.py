@@ -138,7 +138,7 @@ def _settling(session: Session, resource_id: int, now: datetime) -> Optional[tup
             select(func.max(Task.end_date))
             .join(TaskResource, Task.id == TaskResource.task_id)
             .where(TaskResource.resource_id == cid)
-            .where(Task.status.in_([TaskStatus.done, TaskStatus.failed]))
+            .where(Task.status.in_([TaskStatus.done, TaskStatus.error, TaskStatus.failed]))
             .where(Task.end_date <= now)  # a future end is a plan, not a finish
         ).one()
         if last_end and last_end + gap > now:
@@ -242,7 +242,7 @@ def _claim(resource_id: int, session: Session):
 
 @router.post("/{resource_id}/reset-stale")
 def reset_stale_tasks(resource_id: int = DBId(), session: Session = Depends(get_db)):
-    """Mark in_progress tasks for this resource as failed.
+    """Mark in_progress tasks for this resource as error (needs attention).
 
     Called on runner startup to recover from a crashed previous run.
     """
@@ -258,7 +258,7 @@ def reset_stale_tasks(resource_id: int = DBId(), session: Session = Depends(get_
     )
     stale = session.exec(stmt).all()
     for task in stale:
-        task.status = TaskStatus.failed
+        task.status = TaskStatus.error
         session.add(task)
     session.commit()
     return {"reset": len(stale)}

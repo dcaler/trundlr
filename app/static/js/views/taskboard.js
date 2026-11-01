@@ -1,6 +1,9 @@
 // ── Task board view ────────────────────────────────────────────────────────
 
-const STATUS_ORDER = ['todo', 'in_progress', 'paused', 'blocked', 'done', 'failed'];
+const STATUS_ORDER = ['todo', 'in_progress', 'paused', 'blocked', 'done', 'error', 'failed'];
+// Completed: hidden unless "Show completed". error stays visible until it is
+// moved on to failed.
+const COMPLETED = new Set(['done', 'failed']);
 
 function taskSortKey(t) {
   // Scheduled tasks sorted by start_date; unscheduled float to the bottom.
@@ -26,19 +29,20 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
     ? tasks.filter(t => (t.resource_ids || []).includes(resourceFilter))
     : tasks;
   const visible = scoped
-    .filter(t => showCompleted || t.status !== 'done')
+    .filter(t => showCompleted || !COMPLETED.has(t.status))
     .filter(t => !hideDepUnmet || !(t.depends_on_id && taskById[t.depends_on_id]?.status !== 'done'));
-  // in_progress/paused float to top; blocked sink to bottom; rest sort by schedule.
+  // error floats to the very top, then in_progress/paused; blocked sink to bottom;
+  // rest sort by schedule.
   visible.sort((a, b) => {
-    const rank = s => s === 'in_progress' || s === 'paused' ? -1 : s === 'blocked' ? 1 : 0;
+    const rank = s => s === 'error' ? -2 : s === 'in_progress' || s === 'paused' ? -1 : s === 'blocked' ? 1 : 0;
     if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
     return taskSortKey(a) - taskSortKey(b) ||
       (priorityByProject[a.project_id] || 3) - (priorityByProject[b.project_id] || 3);
   });
 
   const rows = visible.map(t => {
-    const done = t.status === 'done';
-    const rowStyle = done ? 'opacity:0.5;text-decoration:line-through' : '';
+    const rowStyle = t.status === 'done' ? 'opacity:0.5;text-decoration:line-through'
+      : t.status === 'failed' ? 'opacity:0.5' : '';
     const statusOpts = STATUS_ORDER.map(s =>
       `<option value="${s}"${t.status === s ? ' selected' : ''}>${escHtml(s.replace('_', ' '))}</option>`
     ).join('');
@@ -78,7 +82,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
   const showDoneChecked     = showCompleted  ? 'checked' : '';
   const hideDepUnmetChecked = hideDepUnmet ? 'checked' : '';
   const totalCount = scoped.length;
-  const doneCount  = scoped.filter(t => t.status === 'done').length;
+  const doneCount  = scoped.filter(t => COMPLETED.has(t.status)).length;
 
   const resourceOpts = resources.map(r =>
     `<option value="${r.id}"${r.id === resourceFilter ? ' selected' : ''}>${escHtml(r.name)}</option>`
@@ -87,7 +91,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
   el.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:1.5rem;margin-bottom:1rem;flex-wrap:wrap">
       <h1 style="margin:0">Tasks</h1>
-      <span style="color:var(--text-muted);font-size:0.9em">${doneCount} / ${totalCount} done</span>
+      <span style="color:var(--text-muted);font-size:0.9em">${doneCount} / ${totalCount} completed</span>
       <button id="btn-reflow" class="btn btn-ghost" style="font-size:0.85em">↺ Re-flow</button>
       <label style="font-size:0.9em">
         Resource

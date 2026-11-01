@@ -301,7 +301,7 @@ def _backfill_eligible_since(conn) -> None:
     for r in reversed(rows):
         if earliest is not None:
             started_after[r.id] = earliest
-        if r.status in ("in_progress", "paused", "done", "failed") and r.start_date:
+        if r.status in ("in_progress", "paused", "done", "error", "failed") and r.start_date:
             start = ts(r.start_date)
             earliest = start if earliest is None else min(earliest, start)
 

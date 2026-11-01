@@ -111,7 +111,7 @@ def get_next_available(resource_id: int = DBId(), session: Session = Depends(get
         t.end_date or t.start_date
         for t in tasks
         if (t.end_date or t.start_date) is not None
-        and t.status not in (TaskStatus.done, TaskStatus.failed)
+        and t.status not in (TaskStatus.done, TaskStatus.error, TaskStatus.failed)
     ]
     next_dt = max(candidates) if candidates else None
     return {"next_available": next_dt.isoformat() if next_dt else None}

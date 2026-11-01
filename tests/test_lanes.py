@@ -580,3 +580,51 @@ def test_an_ordinary_edit_ending_before_its_start_is_still_refused(client, proje
     resp = client.patch(f"/api/tasks/{t}", json={
         "start_date": "2026-07-01T10:00:00", "end_date": "2026-07-01T09:00:00"})
     assert resp.status_code == 422
+
+
+# ── error (needs attention) vs failed (dealt with) — task 1333 ───────────────
+
+def test_a_runner_failure_lands_in_error(client, project_id):
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    _claim(client, gpu)
+    resp = client.patch(f"/api/tasks/{t}", json={"status": "failed", "exit_code": 1})
+    assert resp.json()["status"] == "error"
+
+
+def test_error_can_be_moved_on_to_failed(client, project_id):
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    _claim(client, gpu)
+    client.patch(f"/api/tasks/{t}", json={"status": "failed", "exit_code": 1})
+    resp = client.patch(f"/api/tasks/{t}", json={"status": "failed"})
+    assert resp.json()["status"] == "failed"
+    assert resp.json()["exit_code"] == 1
+
+
+def test_stale_reset_lands_in_error(client, project_id):
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    _claim(client, gpu)
+    assert client.post(f"/api/runner/{gpu}/reset-stale").json() == {"reset": 1}
+    assert client.get(f"/api/tasks/{t}").json()["status"] == "error"
+
+
+@pytest.mark.parametrize("status", ["error", "failed"])
+def test_only_done_satisfies_a_dependency(client, project_id, status):
+    gpu = _gpu(client, "GPU")
+    up = _task(client, project_id, gpu, title="up")
+    down = _task(client, project_id, gpu, title="down", depends_on_id=up)
+    _set_status(client, up, status)
+    resp = _claim(client, gpu)
+    assert resp.status_code == 204 and resp.headers["X-Runner-Idle"].startswith(f"waiting-dep:{down}")
+
+
+def test_error_and_failed_lanes_settle_like_done(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    t = _task(client, project_id, gpu0)
+    _claim(client, gpu0)
+    client.patch(f"/api/tasks/{t}", json={"status": "failed", "exit_code": 1,
+                                          "end_date": (_utcnow() - timedelta(minutes=1)).isoformat()})
+    _task(client, project_id, dual)
+    assert _claim(client, dual).headers["X-Runner-Idle"].startswith("settling:")

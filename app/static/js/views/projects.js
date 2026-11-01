@@ -333,7 +333,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
           </label>`
         ).join('');
 
-  const statusOptions = (selected) => ['todo', 'in_progress', 'paused', 'blocked', 'done', 'failed']
+  const statusOptions = (selected) => ['todo', 'in_progress', 'paused', 'blocked', 'done', 'error', 'failed']
     .map(s => `<option value="${s}"${s === selected ? ' selected' : ''}>${s.replace('_', ' ')}</option>`)
     .join('');
 

@@ -18,7 +18,9 @@ def _reflow(session: Session) -> None:
 
 
 def _notify_status(session: Session, task: Task) -> None:
-    if task.status not in (TaskStatus.done, TaskStatus.failed):
+    # No email for failed: a task only gets there by someone moving it on from
+    # error (already emailed) or marking it by hand.
+    if task.status not in (TaskStatus.done, TaskStatus.error):
         return
     proj = session.get(Project, task.project_id)
     proj_name = proj.name if proj else f"project {task.project_id}"
@@ -42,6 +44,9 @@ def _now_naive(session: Session) -> datetime:
     return datetime.now(tz).replace(tzinfo=None, second=0, microsecond=0)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+# Statuses a task ends in (its times are what actually happened).
+FINISHED = (TaskStatus.done, TaskStatus.error, TaskStatus.failed)
 
 
 def _get_task_or_404(task_id: int, session: Session) -> Task:
@@ -158,6 +163,13 @@ def update_task(
         if not session.get(Project, updates["project_id"]):
             raise HTTPException(status_code=404, detail="Project not found")
 
+    # Work that fails while running needs attention: it lands in error and stays
+    # on the board until someone moves it on to failed. Runners report failed,
+    # so this is where that happens (no runner change needed).
+    if (updates.get("status") == TaskStatus.failed
+            and task.status in (TaskStatus.in_progress, TaskStatus.paused)):
+        updates["status"] = TaskStatus.error
+
     for key, value in updates.items():
         setattr(task, key, value)
 
@@ -165,7 +177,7 @@ def update_task(
     # start moved after the claim (e.g. a calendar client saved a stale copy of
     # the event), that end can fall before it; rejecting the result would leave
     # the task in_progress and block its lane, so back the start out of it.
-    if (task.status in (TaskStatus.done, TaskStatus.failed)
+    if (task.status in FINISHED
             and "end_date" in updates and "start_date" not in updates
             and task.start_date and task.end_date and task.end_date < task.start_date):
         task.start_date = task.end_date - timedelta(hours=updates.get("duration") or 0)
@@ -181,7 +193,7 @@ def update_task(
     if "status" in updates:
         _notify_status(session, task)
         # A task finishing early or late shifts everything planned after it.
-        if task.status in (TaskStatus.done, TaskStatus.failed):
+        if task.status in FINISHED:
             _reflow(session)
     session.refresh(task)
     return _task_read(task, session)

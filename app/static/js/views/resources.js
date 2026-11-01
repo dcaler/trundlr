@@ -224,7 +224,7 @@ async function showResourceDetail(el, resourceId) {
   ]);
 
   const kindLabel     = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
-  const DONE_STATUSES = new Set(['done', 'failed']);
+  const DONE_STATUSES = new Set(['done', 'error', 'failed']);
   const activeCount   = tasks.filter(t => !DONE_STATUSES.has(t.status)).length;
 
   const taskLink = tasks.length === 0

@@ -321,3 +321,17 @@ def test_emails_carry_task_numbers(client, project_id, monkeypatch):
     stuck = _task(client, project_id, gpu)
     subject, body = sent[-1]
     assert subject == "Tasks could not be scheduled" and f"• #{stuck} t:" in body
+
+
+def test_error_is_emailed_but_moving_it_on_to_failed_is_not(client, project_id, monkeypatch):
+    import app.routers.tasks as tasks_router
+    sent = []
+    monkeypatch.setattr(tasks_router, "send_notification",
+                        lambda _s, subject, body, **_: sent.append(subject))
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    client.post(f"/api/runner/{gpu}/claim")
+    client.patch(f"/api/tasks/{t}", json={"status": "failed", "exit_code": 2})
+    assert sent == [f"ERROR: #{t} t"]
+    client.patch(f"/api/tasks/{t}", json={"status": "failed"})
+    assert sent == [f"ERROR: #{t} t"]

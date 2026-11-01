@@ -881,8 +881,8 @@ async def caldav_put_event(cal: str, uid_file: str, request: Request, session: S
             # a client saving a stale copy of the event must not move them (a
             # running task's start moved past its real end made the runner's
             # result fail validation). Title and description still sync.
-            if task.status not in (TaskStatus.in_progress, TaskStatus.paused,
-                                   TaskStatus.done, TaskStatus.failed):
+            if task.status not in (TaskStatus.in_progress, TaskStatus.paused, TaskStatus.done,
+                                   TaskStatus.error, TaskStatus.failed):
                 # Keep duration in sync with the edited span — otherwise a drag/resize
                 # in the calendar client leaves the old (now-wrong) duration behind.
                 task.start_date, task.end_date, duration = _event_placement(session, rid, parsed, tz)

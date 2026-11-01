@@ -18,6 +18,10 @@ class TaskStatus(str, Enum):
     paused = "paused"
     blocked = "blocked"
     done = "done"
+    # error: it broke and needs attention (stays on the board). failed: it
+    # broke and has been dealt with (completed, off the board). Neither
+    # satisfies a dependency; only done does.
+    error = "error"
     failed = "failed"
 
 
