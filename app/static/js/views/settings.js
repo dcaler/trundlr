@@ -86,6 +86,15 @@ registerView('/settings', async (el) => {
         </p>
       </div>
       <div>
+        <label style="display:block;margin-bottom:0.25rem">Age priority (days per level)</label>
+        <input name="age_priority_days" type="number" min="0" max="365"
+          value="${settings.age_priority_days ?? 7}" style="width:6rem">
+        <p style="margin:0.4rem 0 0;font-size:0.85em;color:var(--text-muted)">
+          A task that has been ready to run this many days is planned as if its project were one
+          priority level higher (up to three levels), so nothing waits forever. 0 disables.
+        </p>
+      </div>
+      <div>
         <button type="submit" class="btn btn-primary">Save</button>
         <span id="settings-status" style="margin-left:0.75rem;font-size:0.9em;color:var(--text-muted)"></span>
       </div>
@@ -163,6 +172,7 @@ registerView('/settings', async (el) => {
         runner_folder: (fd.get('runner_folder') || '').trim() || null,
         lane_settle_minutes: parseInt(fd.get('lane_settle_minutes')) || 0,
         auto_reflow_minutes: parseInt(fd.get('auto_reflow_minutes')) || 0,
+        age_priority_days: parseInt(fd.get('age_priority_days')) || 0,
       });
       appSettings = updated;
       statusEl.textContent = 'Saved.';

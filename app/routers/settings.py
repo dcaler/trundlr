@@ -33,6 +33,7 @@ def _to_read(s: AppSettings) -> SettingsRead:
         runner_folder=s.runner_folder,
         lane_settle_minutes=s.lane_settle_minutes,
         auto_reflow_minutes=s.auto_reflow_minutes,
+        age_priority_days=s.age_priority_days,
     )
 
 

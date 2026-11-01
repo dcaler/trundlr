@@ -383,3 +383,160 @@ def test_runner_env_rejects_non_assignments(client, bad):
 def test_runner_folder_round_trip(client):
     client.patch("/api/settings/", json={"runner_folder": "/srv/trundlr"})
     assert client.get("/api/settings/").json()["runner_folder"] == "/srv/trundlr"
+
+
+# ── Dual tasks are not bumped (sticky drain, look-ahead, re-flow on claim) ───
+
+def _utcnow():
+    # No settings row → the app timezone is UTC.
+    return datetime.utcnow().replace(microsecond=0)
+
+
+def _start(client, task_id):
+    return datetime.fromisoformat(client.get(f"/api/tasks/{task_id}").json()["start_date"])
+
+
+def _end(client, task_id):
+    return datetime.fromisoformat(client.get(f"/api/tasks/{task_id}").json()["end_date"])
+
+
+def _row(session, task_id):
+    from app.models import Task
+    session.expire_all()
+    return session.get(Task, task_id)
+
+
+def test_long_single_task_yields_to_a_planned_dual_task(client, lanes, project_id):
+    gpu0, gpu1, dual = lanes
+    _settle(client, 0)
+    a = _task(client, project_id, gpu1, title="A", duration=2)
+    assert _claim(client, gpu1).json()["id"] == a
+    d = _task(client, project_id, dual, title="D", duration=1)
+    s = _task(client, project_id, gpu0, title="S", duration=8)
+
+    # S would still be running when D is due to start (when A ends), so GPU 0
+    # holds back instead of bumping D by eight hours.
+    resp = _claim(client, gpu0)
+    assert resp.status_code == 204
+    assert resp.headers["X-Runner-Idle"] == f"yielding-for:{d}"
+
+    # Work short enough to finish first still runs (backfill).
+    short = _task(client, project_id, gpu0, title="short", duration=0.5)
+    assert _claim(client, gpu0).json()["id"] == short
+
+    _set_status(client, short, "done")
+    _set_status(client, a, "done")
+    assert _claim(client, dual).json()["id"] == d
+    _set_status(client, d, "done")
+    assert _claim(client, gpu0).json()["id"] == s
+
+
+def test_drain_survives_a_reflow(client, session, lanes, project_id):
+    gpu0, gpu1, dual = lanes
+    running = _task(client, project_id, gpu0, title="long gpu0 job", duration=5)
+    assert _claim(client, gpu0).json()["id"] == running
+    d = _task(client, project_id, dual)
+    client.patch(f"/api/tasks/{d}", json={"start_date": "2020-01-01T00:00:00",
+                                          "end_date": "2020-01-01T01:00:00", "pinned": True})
+    _task(client, project_id, gpu1, title="next gpu1 job", duration=0.5)
+    assert _claim(client, gpu1).headers["X-Runner-Idle"] == f"draining-for:{d}"
+    assert _row(session, d).drain_since is not None
+
+    # Unpinned, a re-flow plans D after the running job, in the future. The
+    # drain holds anyway; before, GPU 1 would have claimed and bumped D again.
+    client.patch(f"/api/tasks/{d}", json={"pinned": False})
+    client.post("/api/schedule/reflow")
+    assert _start(client, d) > _utcnow()
+    assert _claim(client, gpu1).headers["X-Runner-Idle"] == f"draining-for:{d}"
+
+
+def test_drain_clears_when_the_dual_task_starts(client, session, lanes, project_id):
+    gpu0, gpu1, dual = lanes
+    _settle(client, 0)
+    running = _task(client, project_id, gpu0)
+    assert _claim(client, gpu0).status_code == 200
+    d = _task(client, project_id, dual)
+    client.patch(f"/api/tasks/{d}", json={"start_date": "2020-01-01T00:00:00",
+                                          "end_date": "2020-01-01T01:00:00", "pinned": True})
+    _task(client, project_id, gpu1)
+    _claim(client, gpu1)
+    _set_status(client, running, "done")
+    assert _claim(client, dual).json()["id"] == d
+    assert _row(session, d).drain_since is None
+
+
+def test_reflow_drops_a_stale_drain(client, session, lanes, project_id):
+    gpu0, _, dual = lanes
+    _task(client, project_id, gpu0)
+    _claim(client, gpu0)
+    d = _task(client, project_id, dual)
+    client.patch(f"/api/tasks/{d}", json={"start_date": "2020-01-01T00:00:00",
+                                          "end_date": "2020-01-01T01:00:00", "pinned": True})
+    _claim(client, gpu0)
+    _claim(client, _gpu(client, "unrelated"))
+    # Moved off the spanning lane: no longer a dual task, so no longer draining.
+    client.patch(f"/api/tasks/{d}", json={"resource_ids": [gpu0]})
+    client.post("/api/schedule/reflow")
+    assert _row(session, d).drain_since is None
+
+
+def test_reflow_places_a_draining_dual_task_first(client, lanes, project_id):
+    gpu0, gpu1, dual = lanes
+    running = _task(client, project_id, gpu1, title="gpu1 job", duration=2)
+    assert _claim(client, gpu1).json()["id"] == running
+    d = _task(client, project_id, dual)
+    client.patch(f"/api/tasks/{d}", json={"start_date": "2020-01-01T00:00:00",
+                                          "end_date": "2020-01-01T01:00:00", "pinned": True})
+    _task(client, project_id, gpu0, title="filler", duration=0.5)
+    assert _claim(client, gpu0).headers["X-Runner-Idle"] == f"draining-for:{d}"
+    client.patch(f"/api/tasks/{d}", json={"pinned": False})
+
+    # New, higher-priority single-lane work can't push the draining task back.
+    urgent = client.post("/api/projects/", json={"name": "Urgent", "priority": 1}).json()["id"]
+    hot = _task(client, urgent, gpu0, title="hot", duration=8)
+    client.post("/api/schedule/reflow")
+    assert _start(client, d) <= _end(client, running) + timedelta(minutes=1)
+    assert _start(client, hot) >= _end(client, d)
+
+
+def test_a_claim_replans_the_dual_task(client, lanes, project_id):
+    gpu0, gpu1, dual = lanes
+    soon = _utcnow() + timedelta(hours=1)
+    a = _task(client, project_id, gpu1, title="A", duration=2)
+    client.patch(f"/api/tasks/{a}", json={"start_date": soon.isoformat(),
+                                          "end_date": (soon + timedelta(hours=2)).isoformat(),
+                                          "pinned": True})
+    d = _task(client, project_id, dual, title="D", duration=3)  # too long for the gap before A
+    assert _start(client, d) >= soon + timedelta(hours=2) - timedelta(minutes=1)
+
+    # A starts an hour early, so D can too; the claim re-plans straight away.
+    assert _claim(client, gpu1).json()["id"] == a
+    assert abs(_start(client, d) - _end(client, a)) < timedelta(minutes=2)
+
+
+def test_reflow_plans_dual_work_ahead_of_same_priority_single_work(client, lanes, project_id):
+    gpu0, _, dual = lanes
+    single = _task(client, project_id, gpu0, title="single", duration=2)
+    d = _task(client, project_id, dual, title="dual", duration=1)
+    client.post("/api/schedule/reflow")
+    assert _start(client, d) < _start(client, single)
+
+
+def test_no_spanning_lanes_means_no_look_ahead(client, project_id):
+    gpu = _gpu(client, "lone GPU")
+    t = _task(client, project_id, gpu, duration=100)
+    assert _claim(client, gpu).json()["id"] == t
+
+
+def test_a_failed_reflow_does_not_fail_the_claim(client, project_id, monkeypatch):
+    import app.routers.runner as runner_router
+
+    def boom(_session):
+        raise RuntimeError("reflow broke")
+
+    monkeypatch.setattr(runner_router, "run_reflow", boom)
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    resp = _claim(client, gpu)
+    assert resp.status_code == 200 and resp.json()["id"] == t
+    assert client.get(f"/api/tasks/{t}").json()["status"] == "in_progress"

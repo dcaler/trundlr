@@ -1,5 +1,6 @@
+import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -8,12 +9,15 @@ from sqlmodel import Session, select
 
 from app.database import get_db
 from app.models import AppSettings, Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
-from app.reflow import SCHEDULE_LOCK
-from app.scheduling import conflicting_resource_ids, is_blocked_at, spanning_resource_ids
+from app.reflow import SCHEDULE_LOCK, run_reflow
+from app.scheduling import (
+    conflicting_resource_ids, is_blocked_at, spanning_resource_ids, task_duration,
+)
 from app.schemas import RunnerClaimRead
 from app.validation import DBId
 
 router = APIRouter(prefix="/api/runner", tags=["runner"])
+logger = logging.getLogger(__name__)
 
 
 def _now_naive(session: Session) -> datetime:
@@ -39,12 +43,16 @@ def _active_task(session: Session, resource_id: int) -> Optional[Task]:
     ).first()
 
 
-def _next_candidate(session: Session, resource_id: int) -> tuple[Optional[Task], str]:
+def _next_candidate(
+    session: Session, resource_id: int,
+    fits: Optional[Callable[[Task], bool]] = None, yield_reason: str = "",
+) -> tuple[Optional[Task], str]:
     """The task a runner for this resource would claim next, or (None, idle reason).
 
     Walks queued tasks with a command in start_date order, skipping any whose
     dependency isn't done, so unrelated tasks can run past a chain blocked by a
-    failed upstream.
+    failed upstream. With `fits`, also skips tasks it rejects (idle reason
+    `yield_reason`), so shorter work further down the queue can still run.
     """
     candidates = session.exec(
         select(Task)
@@ -65,6 +73,9 @@ def _next_candidate(session: Session, resource_id: int) -> tuple[Optional[Task],
                 if idle_reason == "empty-queue" and dep is not None:
                     idle_reason = f"waiting-dep:{candidate.id}:{dep.id}:{dep.status}"
                 continue
+        if fits and not fits(candidate):
+            idle_reason = yield_reason
+            continue
         return candidate, idle_reason
     return None, idle_reason
 
@@ -76,14 +87,38 @@ def _draining_for(session: Session, resource_id: int, now: datetime) -> Optional
     with is idle, which busy single lanes rarely are at once. So once its next
     task is eligible — dependency done, start time reached, lane not blocked —
     the lanes it spans stop claiming until it has run.
+
+    The drain is sticky: the first time the task comes due its drain_since is
+    set, and it keeps draining even if a later re-flow plans it into the future
+    again (it would otherwise be bumped indefinitely by whichever lane frees up
+    first). drain_since clears when the task is claimed (or by re-flow, if it
+    leaves todo or the spanning lane).
     """
     for sid in sorted(spanning_resource_ids(session, resource_id)):
         if _active_task(session, sid) or is_blocked_at(session, sid, now):
             continue
         task, _ = _next_candidate(session, sid)
-        if task and (task.start_date is None or task.start_date <= now):
-            return task
+        if task is None:
+            continue
+        if task.drain_since is None:
+            if task.start_date is not None and task.start_date > now:
+                continue
+            task.drain_since = now
+            session.add(task)
+            session.commit()
+        return task
     return None
+
+
+def _upcoming_spanning_task(session: Session, resource_id: int, now: datetime) -> Optional[Task]:
+    """The earliest-planned next task of a lane spanning this one, not yet due."""
+    upcoming = None
+    for sid in spanning_resource_ids(session, resource_id):
+        task, _ = _next_candidate(session, sid)
+        if (task and task.start_date and task.start_date > now
+                and (upcoming is None or task.start_date < upcoming.start_date)):
+            upcoming = task
+    return upcoming
 
 
 def _settling(session: Session, resource_id: int, now: datetime) -> Optional[tuple[int, datetime]]:
@@ -163,7 +198,15 @@ def _claim(resource_id: int, session: Session):
         return Response(status_code=204,
                         headers={"X-Runner-Idle": f"draining-for:{waiting.id}"})
 
-    task, idle_reason = _next_candidate(session, resource_id)
+    # Look ahead (as Slurm's backfill does): skip work that would still be
+    # running when a spanning lane's planned task is due to start.
+    upcoming = _upcoming_spanning_task(session, resource_id, now)
+    if upcoming:
+        def fits(t: Task) -> bool:
+            return now + task_duration(t) <= upcoming.start_date
+        task, idle_reason = _next_candidate(session, resource_id, fits, f"yielding-for:{upcoming.id}")
+    else:
+        task, idle_reason = _next_candidate(session, resource_id)
     if task is None:
         return Response(status_code=204, headers={"X-Runner-Idle": idle_reason})
 
@@ -172,8 +215,19 @@ def _claim(resource_id: int, session: Session):
         dur = task.end_date - task.start_date
         task.end_date = now + dur
     task.start_date = now
+    task.drain_since = None
     session.add(task)
     session.commit()
+    # A task that starts earlier or later than planned moves everything behind
+    # it, including a spanning lane's planned start (which the look-ahead and
+    # drain above rely on), so re-plan now rather than at the next event. The
+    # claim is already committed: a failed re-flow must not turn it into an
+    # error the runner would retry while the task sits in_progress.
+    try:
+        run_reflow(session)
+    except Exception:
+        session.rollback()
+        logger.exception("re-flow after claiming task %s failed", task.id)
     session.refresh(task)
 
     project = session.get(Project, task.project_id)

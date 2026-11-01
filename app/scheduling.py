@@ -33,6 +33,9 @@ SCHED_HORIZON_DAYS = 365
 # seeing it as busy instead of planning around an end that already passed.
 OVERRUN_MARGIN = timedelta(hours=1)
 
+# Age priority never lifts a task more than this many project-priority levels.
+MAX_AGE_LEVELS = 3
+
 
 @dataclass(frozen=True)
 class DayUtilization:
@@ -518,7 +521,7 @@ def _earliest_slot(
     return None
 
 
-def _task_duration(task: Task) -> timedelta:
+def task_duration(task: Task) -> timedelta:
     """Block length to schedule: the duration field (hours), else the existing
     start→end span, else 1 hour."""
     if task.duration:
@@ -557,7 +560,8 @@ def reflow_schedule(session: Session) -> dict:
 
     # A task on a resource also occupies every resource that conflicts with it
     # (spanning lanes), so the board never promises overlapping lane times.
-    conflicts = conflict_map(resource_spans(session), resources)
+    spans = resource_spans(session)
+    conflicts = conflict_map(spans, resources)
 
     def occupy(rid: int, iv: Interval) -> None:
         busy[rid].append(iv)
@@ -572,6 +576,28 @@ def reflow_schedule(session: Session) -> dict:
             t.end_date = now + OVERRUN_MARGIN
             session.add(t)
             stretched += 1
+
+    # Scheduler bookkeeping. eligible_since tracks how long a todo task has been
+    # ready (age priority); drain_since only means something on a todo task
+    # still on a spanning lane, so drop it anywhere else (finished, edited).
+    def on_spanning_lane(t: Task) -> bool:
+        return any(r in spans for r in res_by_task.get(t.id, []))
+
+    for t in tasks:
+        dep = tasks_by_id.get(t.depends_on_id) if t.depends_on_id else None
+        ready = t.status == TaskStatus.todo and (
+            t.depends_on_id is None or (dep is not None and dep.status == TaskStatus.done))
+        if ready and t.eligible_since is None:
+            t.eligible_since = now
+            session.add(t)
+        elif not ready and t.eligible_since is not None:
+            t.eligible_since = None
+            session.add(t)
+        if t.drain_since and not (t.status == TaskStatus.todo and on_spanning_lane(t)):
+            t.drain_since = None
+            session.add(t)
+
+    age_days = settings.age_priority_days if settings else 7
 
     # Immovable obstacles: in-flight/finished tasks and pinned todos hold their
     # slots so movable work routes around them. end_of seeds dependency
@@ -588,13 +614,24 @@ def reflow_schedule(session: Session) -> dict:
                     occupy(rid, (t.start_date, t.end_date))
             end_of[t.id] = t.end_date
 
-    def prio(t: Task) -> tuple[int, int, int, int]:
+    def prio(t: Task) -> tuple[int, ...]:
         p = projects.get(t.project_id)
+        # A spanning-lane task whose lanes are already draining for it is
+        # placed first, at the earliest time all those lanes are free, so new
+        # single-lane work can't push it back (see runner._draining_for).
+        reserved = 0 if t.drain_since else 1
+        # Age priority: one project-priority level per age_days ready, capped.
+        level = p.priority if p else 3
+        if age_days and t.eligible_since:
+            level -= min(MAX_AGE_LEVELS, (now - t.eligible_since) // timedelta(days=age_days))
+        # Size priority: a spanning-lane task needs every lane it spans free at
+        # once, so it goes ahead of same-priority single-lane work.
+        single = 0 if on_spanning_lane(t) else 1
         # Within a project, a "Bug Fix ..." task jumps ahead of its siblings
         # (but never ahead of a higher-priority project) — identified by the
         # title convention the Projects page's "+ Bug Fix" quick-add uses.
         is_bugfix = 0 if t.title.strip().lower().startswith("bug fix") else 1
-        return ((p.priority if p else 3), t.project_id, is_bugfix, t.id)
+        return (reserved, level, single, t.project_id, is_bugfix, t.id)
 
     # Movable: unpinned todos with at least one resource. (Resource-less tasks
     # can't occupy a timeline; like the previous scheduler, they're left alone.)
@@ -624,13 +661,13 @@ def reflow_schedule(session: Session) -> dict:
             rids = [r for r in res_by_task.get(t.id, []) if r in resources]
             slot = _earliest_slot(
                 [resources[r] for r in rids],
-                earliest, _task_duration(t), busy, windows_by_res, blockouts_by_res,
+                earliest, task_duration(t), busy, windows_by_res, blockouts_by_res,
             )
             if slot is None:
                 unscheduled.append({"id": t.id, "title": t.title,
                                     "reason": "no availability within horizon"})
             else:
-                end = slot + _task_duration(t)
+                end = slot + task_duration(t)
                 placed[t.id] = (slot, end)
                 end_of[t.id] = end
                 for r in rids:

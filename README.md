@@ -130,7 +130,7 @@ Interactive docs (Swagger UI) are available at **`/docs`** when the app is runni
 
 `kind` must be one of `human`, `ai`, `cpu`, or `gpu`.  
 Availability defaults to `available_from`–`available_to` (`"09:00"`–`"17:00"`) on `available_days` (bitmask, bit 0 = Mon; default `31` = Mon–Fri). Per-day windows (`/{id}/windows`) replace that when present; blockouts (`/{id}/blockouts`) and CalDAV-painted blocks subtract from it.  
-`spans_ids` lists the lanes a resource is built from (e.g. a `GPU 0+1` lane spans `GPU 0` and `GPU 1`). Conflicting lanes never run at once: a runner won't claim while a conflicting lane has a task in progress, the lanes a resource spans stop claiming once its next task is due (`X-Runner-Idle: draining-for:<task>`), and reflow schedules them back to back. After a task ends, conflicting lanes also wait `lane_settle_minutes` (Settings, default 5, `X-Runner-Idle: settling:…`) so the model it left loaded on the shared card can unload.  
+`spans_ids` lists the lanes a resource is built from (e.g. a `GPU 0+1` lane spans `GPU 0` and `GPU 1`). Conflicting lanes never run at once: a runner won't claim while a conflicting lane has a task in progress, the lanes a resource spans stop claiming once its next task is due (`X-Runner-Idle: draining-for:<task>`) and keep holding until it starts, even if a later reflow moves its planned time. Before that, a spanned lane skips work that would still be running at the spanning task's planned start and takes shorter work instead (`X-Runner-Idle: yielding-for:<task>`). Reflow schedules them back to back. After a task ends, conflicting lanes also wait `lane_settle_minutes` (Settings, default 5, `X-Runner-Idle: settling:…`) so the model it left loaded on the shared card can unload.  
 `runner_env` (one `KEY=value` per line) and the `runner_folder` setting fill in the Helper page's runner commands, e.g. a GPU lane's `OLLAMA_URL` and `CUDA_VISIBLE_DEVICES`.
 
 ### Tasks
@@ -146,7 +146,7 @@ Availability defaults to `available_from`–`available_to` (`"09:00"`–`"17:00"
 `status` values: `todo`, `in_progress`, `paused`, `blocked`, `done`, `failed`.  
 `duration` is total hours; `start_date`/`end_date` are datetimes and `end_date` must not be before `start_date`.  
 Assign resources with `resource_ids` (a task may have several); set a predecessor with `depends_on_id`.  
-`POST /api/schedule/reflow` re-places all unpinned `todo` tasks by project priority and dependencies. The board also re-flows when a task is created, deleted or finished, and every `auto_reflow_minutes` (Settings, default 60). A running task past its planned end is treated as needing at least another hour, so the plan never assumes it has finished. Pin a task to keep a hand-set time.
+`POST /api/schedule/reflow` re-places all unpinned `todo` tasks by project priority and dependencies. The board also re-flows when a task is created, deleted, claimed by a runner or finished, and every `auto_reflow_minutes` (Settings, default 60). Ordering: a spanning-lane task its lanes are already draining for goes first; then project priority, where a task gains one level per `age_priority_days` (Settings, default 7, up to three levels, 0 disables) it has been ready to run; then spanning-lane tasks ahead of single-lane ones. A running task past its planned end is treated as needing at least another hour, so the plan never assumes it has finished. Pin a task to keep a hand-set time.
 
 ### Schedule & utilization
 

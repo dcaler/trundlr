@@ -217,3 +217,64 @@ def test_auto_reflow_tick_follows_the_setting(file_engine, monkeypatch):
         s.commit()
     assert reflow.auto_reflow_tick(file_engine, last_run=0, now=10 ** 6) == 0
     assert runs == []
+
+
+# ── Age priority ─────────────────────────────────────────────────────────────
+
+def _row(session, task_id):
+    from app.models import Task
+    session.expire_all()
+    return session.get(Task, task_id)
+
+
+def test_ready_tasks_get_eligible_since_and_waiting_ones_do_not(client, session, project_id):
+    gpu = _gpu(client, "GPU")
+    a = _task(client, project_id, gpu)
+    b = _task(client, project_id, gpu, depends_on_id=a)
+    assert _row(session, a).eligible_since is not None
+    assert _row(session, b).eligible_since is None
+    client.patch(f"/api/tasks/{a}", json={"status": "done"})
+    assert _row(session, a).eligible_since is None
+    assert _row(session, b).eligible_since is not None
+
+
+def _age(session, task_id, days):
+    row = _row(session, task_id)
+    row.eligible_since = _now() - timedelta(days=days)
+    session.add(row)
+    session.commit()
+
+
+def _two_priorities(client):
+    low = client.post("/api/projects/", json={"name": "Low", "priority": 4}).json()["id"]
+    high = client.post("/api/projects/", json={"name": "High", "priority": 2}).json()["id"]
+    gpu = _gpu(client, "GPU")
+    old = _task(client, low, gpu, duration=1)
+    new = _task(client, high, gpu, duration=1)
+    return old, new
+
+
+def test_a_long_wait_lifts_a_low_priority_task(client, session):
+    old, new = _two_priorities(client)
+    client.post("/api/schedule/reflow")
+    assert _get(client, new)["start_date"] < _get(client, old)["start_date"]
+    _age(session, old, 22)  # three levels: Low (4) plays as Critical (1)
+    client.post("/api/schedule/reflow")
+    assert _get(client, old)["start_date"] < _get(client, new)["start_date"]
+
+
+def test_age_priority_is_capped_and_can_be_disabled(client, session):
+    old, new = _two_priorities(client)
+    _age(session, old, 10 ** 4)
+    client.patch("/api/settings/", json={"age_priority_days": 0})
+    client.post("/api/schedule/reflow")
+    assert _get(client, new)["start_date"] < _get(client, old)["start_date"]
+
+
+def test_age_priority_defaults_to_a_week(client):
+    assert client.get("/api/settings/").json()["age_priority_days"] == 7
+
+
+@pytest.mark.parametrize("bad", [-1, 366])
+def test_age_priority_bounds(client, bad):
+    assert client.patch("/api/settings/", json={"age_priority_days": bad}).status_code == 422

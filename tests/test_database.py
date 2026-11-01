@@ -120,3 +120,23 @@ def test_migration_adds_runner_columns_to_old_db(temp_db):
         set_cols = {r[1] for r in c.execute(text("PRAGMA table_info(appsettings)"))}
     assert "runner_env" in res_cols
     assert {"runner_folder", "lane_settle_minutes"} <= set_cols
+
+
+def test_migration_adds_scheduler_columns_to_old_db(temp_db):
+    """A database from before age priority and sticky drains gains their columns."""
+    from sqlalchemy import text
+    from app.database import apply_migrations
+
+    engine = get_engine(temp_db)
+    create_db_and_tables(engine)
+    with engine.connect() as c:
+        c.execute(text("ALTER TABLE task DROP COLUMN eligible_since"))
+        c.execute(text("ALTER TABLE task DROP COLUMN drain_since"))
+        c.execute(text("ALTER TABLE appsettings DROP COLUMN age_priority_days"))
+        c.commit()
+    apply_migrations(engine)
+    with engine.connect() as c:
+        task_cols = {r[1] for r in c.execute(text("PRAGMA table_info(task)"))}
+        set_cols = {r[1] for r in c.execute(text("PRAGMA table_info(appsettings)"))}
+    assert {"eligible_since", "drain_since"} <= task_cols
+    assert "age_priority_days" in set_cols

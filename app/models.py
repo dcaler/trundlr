@@ -82,6 +82,10 @@ class AppSettings(SQLModel, table=True):
     lane_settle_minutes: int = Field(default=5)
     # Re-flow the whole board this often, in the background. 0 disables.
     auto_reflow_minutes: int = Field(default=60)
+    # Age priority: a todo task gains one project-priority level per this many
+    # days it has been ready to run (see Task.eligible_since), up to
+    # MAX_AGE_LEVELS. 0 disables.
+    age_priority_days: int = Field(default=7)
 
 
 class Task(SQLModel, table=True):
@@ -111,6 +115,13 @@ class Task(SQLModel, table=True):
     # Set when this task's predecessor was deleted: its depends_on_id is cleared
     # and status forced to blocked, signalling the user to pick a new dependency.
     dependency_broken: bool = Field(default=False)
+    # Scheduler bookkeeping, both naive app-timezone datetimes (see reflow).
+    # eligible_since: when this todo task last became ready (dependency done);
+    # drives age priority. drain_since: when this task on a spanning lane first
+    # came due; from then on the lanes it spans stop claiming until it starts,
+    # whatever later re-flows do to its planned start.
+    eligible_since: Optional[datetime] = Field(default=None)
+    drain_since: Optional[datetime] = Field(default=None)
 
     project: Optional[Project] = Relationship(back_populates="tasks")
 

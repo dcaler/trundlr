@@ -355,6 +355,7 @@ class SettingsRead(BaseModel):
     runner_folder: Optional[str] = None
     lane_settle_minutes: int = 5
     auto_reflow_minutes: int = 60
+    age_priority_days: int = 7
 
     model_config = {"from_attributes": True}
 
@@ -372,6 +373,7 @@ class SettingsUpdate(BaseModel):
     runner_folder: Optional[str] = None
     lane_settle_minutes: Optional[int] = Field(default=None, ge=0, le=120)
     auto_reflow_minutes: Optional[int] = Field(default=None, ge=0, le=1440)
+    age_priority_days: Optional[int] = Field(default=None, ge=0, le=365)
 
     @field_validator("timezone")
     @classmethod

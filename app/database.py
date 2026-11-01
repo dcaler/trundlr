@@ -236,6 +236,7 @@ def apply_migrations(engine):
             ("runner_folder", "TEXT"),
             ("lane_settle_minutes", "INTEGER NOT NULL DEFAULT 5"),
             ("auto_reflow_minutes", "INTEGER NOT NULL DEFAULT 60"),
+            ("age_priority_days", "INTEGER NOT NULL DEFAULT 7"),
         ]:
             if col not in appsettings_cols:
                 conn.execute(text(f"ALTER TABLE appsettings ADD COLUMN {col} {ddl}"))
@@ -268,6 +269,10 @@ def apply_migrations(engine):
         if "log_tail" not in task_cols2:
             conn.execute(text("ALTER TABLE task ADD COLUMN log_tail TEXT"))
             conn.commit()
+        for col in ("eligible_since", "drain_since"):
+            if col not in task_cols2:
+                conn.execute(text(f"ALTER TABLE task ADD COLUMN {col} DATETIME"))
+        conn.commit()
 
 
 def get_session(engine) -> Generator[Session, None, None]:
