@@ -8,7 +8,10 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
-from app.models import AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock, ResourceSpan, ResourceWindow, Task, TaskResource, TaskStatus
+from app.models import (
+    AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock, ResourceKind, ResourcePool, ResourceSpan,
+    ResourceWindow, Task, TaskResource, TaskStatus,
+)
 from app.schemas import BlockoutCreate, BlockoutRead, ResourceCreate, ResourceRead, ResourceUpdate, WindowCreate, WindowRead
 from app.scheduling import calblock_segments
 from app.validation import DBId
@@ -32,12 +35,55 @@ def _validate_spans(resource_id: Optional[int], spans_ids: list[int], session: S
             raise HTTPException(status_code=404, detail=f"Resource {sid} not found")
         if _spans_ids(sid, session):
             raise HTTPException(status_code=422, detail=f"Resource {sid} spans other resources and cannot be spanned")
+        if _member_ids(sid, session):
+            raise HTTPException(status_code=422, detail=f"Resource {sid} is a pool and cannot be spanned")
     if spans_ids and resource_id is not None:
         spanned_by = session.exec(
             select(ResourceSpan).where(ResourceSpan.spans_id == resource_id)
         ).first()
         if spanned_by:
             raise HTTPException(status_code=422, detail="A resource that is spanned cannot span others")
+
+
+def _member_ids(pool_id: int, session: Session) -> list[int]:
+    return sorted(session.exec(
+        select(ResourcePool.member_id).where(ResourcePool.pool_id == pool_id)
+    ).all())
+
+
+def _validate_pool(resource_id: Optional[int], member_ids: list[int], spans_ids: list[int],
+                   session: Session) -> None:
+    """A pool is a set of plain cpu/gpu lanes: it doesn't span anything, isn't
+    spanned or pooled itself, and its members are not pools or spanning lanes
+    (a spanning lane's work needs all its cards, so it isn't interchangeable)."""
+    if not member_ids:
+        return
+    if resource_id is not None and resource_id in member_ids:
+        raise HTTPException(status_code=422, detail="A pool cannot be its own member")
+    if spans_ids:
+        raise HTTPException(status_code=422, detail="A pool cannot also span resources")
+    if resource_id is not None:
+        if session.exec(select(ResourceSpan).where(ResourceSpan.spans_id == resource_id)).first():
+            raise HTTPException(status_code=422, detail="A spanned resource cannot be a pool")
+        if session.exec(select(ResourcePool).where(ResourcePool.member_id == resource_id)).first():
+            raise HTTPException(status_code=422, detail="A pool member cannot itself be a pool")
+    for mid in member_ids:
+        member = session.get(Resource, mid)
+        if not member:
+            raise HTTPException(status_code=404, detail=f"Resource {mid} not found")
+        if member.kind not in (ResourceKind.cpu, ResourceKind.gpu):
+            raise HTTPException(status_code=422, detail=f"Resource {mid} is not a cpu/gpu lane")
+        if _member_ids(mid, session):
+            raise HTTPException(status_code=422, detail=f"Resource {mid} is a pool and cannot be a member")
+        if _spans_ids(mid, session):
+            raise HTTPException(status_code=422, detail=f"Resource {mid} spans other resources and cannot be pooled")
+
+
+def _set_members(pool_id: int, member_ids: list[int], session: Session) -> None:
+    for row in session.exec(select(ResourcePool).where(ResourcePool.pool_id == pool_id)).all():
+        session.delete(row)
+    for mid in dict.fromkeys(member_ids):
+        session.add(ResourcePool(pool_id=pool_id, member_id=mid))
 
 
 def _set_spans(resource_id: int, spans_ids: list[int], session: Session) -> None:
@@ -48,7 +94,8 @@ def _set_spans(resource_id: int, spans_ids: list[int], session: Session) -> None
 
 
 def _resource_read(resource: Resource, session: Session) -> ResourceRead:
-    return ResourceRead(**resource.model_dump(), spans_ids=_spans_ids(resource.id, session))
+    return ResourceRead(**resource.model_dump(), spans_ids=_spans_ids(resource.id, session),
+                        member_ids=_member_ids(resource.id, session))
 
 
 @router.get("/", response_model=List[ResourceRead])
@@ -59,10 +106,12 @@ def list_resources(session: Session = Depends(get_db)):
 @router.post("/", response_model=ResourceRead, status_code=201)
 def create_resource(data: ResourceCreate, session: Session = Depends(get_db)):
     _validate_spans(None, data.spans_ids, session)
-    resource = Resource(**data.model_dump(exclude={"spans_ids"}))
+    _validate_pool(None, data.member_ids, data.spans_ids, session)
+    resource = Resource(**data.model_dump(exclude={"spans_ids", "member_ids"}))
     session.add(resource)
     session.flush()
     _set_spans(resource.id, data.spans_ids, session)
+    _set_members(resource.id, data.member_ids, session)
     session.commit()
     session.refresh(resource)
     return _resource_read(resource, session)
@@ -89,7 +138,16 @@ def update_resource(
     if "spans_ids" in updates:
         spans_ids = updates.pop("spans_ids") or []
         _validate_spans(resource_id, spans_ids, session)
+        if spans_ids and _member_ids(resource_id, session):
+            raise HTTPException(status_code=422, detail="A pool cannot also span resources")
+        if spans_ids and session.exec(
+                select(ResourcePool).where(ResourcePool.member_id == resource_id)).first():
+            raise HTTPException(status_code=422, detail="A pool member cannot span resources")
         _set_spans(resource_id, spans_ids, session)
+    if "member_ids" in updates:
+        member_ids = updates.pop("member_ids") or []
+        _validate_pool(resource_id, member_ids, _spans_ids(resource_id, session), session)
+        _set_members(resource_id, member_ids, session)
     for key, value in updates.items():
         setattr(resource, key, value)
     session.add(resource)
@@ -184,6 +242,13 @@ def delete_resource(resource_id: int = DBId(), session: Session = Depends(get_db
         (ResourceSpan.resource_id == resource_id) | (ResourceSpan.spans_id == resource_id)
     )).all():
         session.delete(sp)
+    for pm in session.exec(select(ResourcePool).where(
+        (ResourcePool.pool_id == resource_id) | (ResourcePool.member_id == resource_id)
+    )).all():
+        session.delete(pm)
+    for t in session.exec(select(Task).where(Task.pool_id == resource_id)).all():
+        t.pool_id = None
+        session.add(t)
     session.flush()  # send child deletes to DB before removing resource (FK ordering)
     session.delete(resource)
     session.commit()

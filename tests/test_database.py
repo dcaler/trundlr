@@ -178,3 +178,25 @@ def test_migration_backdates_eligible_since(temp_db):
     assert got[4] is None                 # dependency still running
     assert got[6] is None                 # nothing later has run: re-flow stamps it
     assert got[2] is None and got[5] is None
+
+
+def test_migration_adds_task_pool_id(temp_db):
+    """pool_id is a foreign key, which SQLite can't drop, so rebuild an old task table."""
+    from sqlalchemy import text
+    from app.database import apply_migrations
+
+    engine = get_engine(temp_db)
+    create_db_and_tables(engine)
+    with engine.connect() as c:
+        cols = [r[1] for r in c.execute(text("PRAGMA table_info(task)")) if r[1] != "pool_id"]
+        c.execute(text("PRAGMA foreign_keys=OFF"))
+        c.execute(text(f"CREATE TABLE task_old AS SELECT {', '.join(cols)} FROM task"))
+        c.execute(text("DROP TABLE task"))
+        c.execute(text("ALTER TABLE task_old RENAME TO task"))
+        c.commit()
+    apply_migrations(engine)
+    with engine.connect() as c:
+        task_cols = {r[1] for r in c.execute(text("PRAGMA table_info(task)"))}
+        tables = {r[0] for r in c.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+    assert "pool_id" in task_cols
+    assert "resourcepool" in tables

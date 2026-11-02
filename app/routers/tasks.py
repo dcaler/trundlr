@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from app.database import get_db
 from app.email import send_notification
-from app.models import AppSettings, Project, Resource, Task, TaskResource, TaskStatus
+from app.models import AppSettings, Project, Resource, ResourcePool, Task, TaskResource, TaskStatus
 from app.reflow import project_names, run_reflow
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 from app.validation import DBId, OptionalDBIdQuery
@@ -44,6 +44,20 @@ def _now_naive(session: Session) -> datetime:
     return datetime.now(tz).replace(tzinfo=None, second=0, microsecond=0)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+
+def _return_to_pool(session: Session, task: Task) -> None:
+    members = set(session.exec(
+        select(ResourcePool.member_id).where(ResourcePool.pool_id == task.pool_id)
+    ).all())
+    if session.get(Resource, task.pool_id) is not None:
+        for tr in session.exec(select(TaskResource).where(TaskResource.task_id == task.id)).all():
+            if tr.resource_id in members:
+                session.delete(tr)
+        session.flush()
+        if not session.get(TaskResource, (task.id, task.pool_id)):
+            session.add(TaskResource(task_id=task.id, resource_id=task.pool_id))
+    task.pool_id = None
 
 # Statuses a task ends in (its times are what actually happened).
 FINISHED = (TaskStatus.done, TaskStatus.error, TaskStatus.failed)
@@ -140,6 +154,10 @@ def update_task(
             if not session.get(Resource, rid):
                 raise HTTPException(status_code=404, detail=f"Resource {rid} not found")
         _set_resources(task.id, updates.pop("resource_ids"), session)
+        task.pool_id = None  # placed by hand: no longer a pool task to return
+    elif updates.get("status") == TaskStatus.todo and task.pool_id is not None:
+        # Retrying a task a pool lane took: back onto the pool, for any member.
+        _return_to_pool(session, task)
 
     if "depends_on_id" in updates:
         new_dep = updates["depends_on_id"]

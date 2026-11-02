@@ -58,12 +58,27 @@ function kindField(selected = 'human', includeLabel = true) {
 // Lanes this resource is built from (e.g. GPU 0+1 spans GPU 0 and GPU 1).
 // Only resources that don't themselves span others can be spanned.
 function spansField(resources, selfId = null, selected = []) {
-  const options = resources.filter(r => r.id !== selfId && !(r.spans_ids || []).length);
+  const options = resources.filter(r => r.id !== selfId && !(r.spans_ids || []).length
+    && !(r.member_ids || []).length);
   if (!options.length) return '';
   const boxes = options.map(r => `<label style="white-space:nowrap;font-size:0.85em">
       <input type="checkbox" name="spans_ids" value="${r.id}"${selected.includes(r.id) ? ' checked' : ''}> ${escHtml(r.name)}
     </label>`).join(' ');
   return `<div><label title="Never runs at the same time as the lanes it spans">Spans</label>
+    <div style="display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">${boxes}</div>
+  </div>`;
+}
+
+// Lanes that serve this pool: its tasks run on whichever member is free first.
+// Members are plain cpu/gpu lanes (not pools, not spanning lanes).
+function membersField(resources, selfId = null, selected = []) {
+  const options = resources.filter(r => r.id !== selfId && (r.kind === 'cpu' || r.kind === 'gpu')
+    && !(r.spans_ids || []).length && !(r.member_ids || []).length);
+  if (!options.length) return '';
+  const boxes = options.map(r => `<label style="white-space:nowrap;font-size:0.85em">
+      <input type="checkbox" name="member_ids" value="${r.id}"${selected.includes(r.id) ? ' checked' : ''}> ${escHtml(r.name)}
+    </label>`).join(' ');
+  return `<div><label title="A pool has no runner: tasks queued on it run on whichever of these lanes is free first">Pool of</label>
     <div style="display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">${boxes}</div>
   </div>`;
 }
@@ -77,7 +92,9 @@ function runnerEnvField(r = null) {
 }
 
 function spansLabel(r, byId) {
-  const names = (r.spans_ids || []).map(id => byId[id]?.name || `#${id}`);
+  const name = id => byId[id]?.name || `#${id}`;
+  if ((r.member_ids || []).length) return ` · pool of ${r.member_ids.map(name).join(', ')}`;
+  const names = (r.spans_ids || []).map(name);
   return names.length ? ` · spans ${names.join(', ')}` : '';
 }
 
@@ -97,6 +114,7 @@ function buildPayload(fd, form) {
     available_to:   fd.get('available_to'),
     available_days: collectDaysFromForm(form),
     spans_ids: fd.getAll('spans_ids').map(Number),
+    member_ids: fd.getAll('member_ids').map(Number),
     runner_env: fd.get('runner_env') || null,
   };
 }
@@ -324,7 +342,8 @@ async function showResourcesList(el, editingId = null) {
             <div class="avail-fields">
               ${availabilityFields(r)}
             </div>
-            ${resources.some(o => (o.spans_ids || []).includes(r.id)) ? '' : spansField(resources, r.id, r.spans_ids || [])}
+            ${resources.some(o => (o.spans_ids || []).includes(r.id)) || (r.member_ids || []).length ? '' : spansField(resources, r.id, r.spans_ids || [])}
+            ${resources.some(o => (o.spans_ids || []).includes(r.id) || (o.member_ids || []).includes(r.id)) || (r.spans_ids || []).length ? '' : membersField(resources, r.id, r.member_ids || [])}
             ${runnerEnvField(r)}
             <div style="align-self:flex-end;display:flex;gap:0.25rem">
               <button type="submit" class="btn btn-primary">Save</button>
@@ -361,6 +380,7 @@ async function showResourcesList(el, editingId = null) {
         ${availabilityFields()}
       </div>
       ${spansField(resources)}
+      ${membersField(resources)}
       ${runnerEnvField()}
       <div style="align-self:flex-end">
         <button type="submit" class="btn btn-primary">+ Add Resource</button>

@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from app.models import (
     AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock,
-    ResourceSpan, ResourceWindow, Task, TaskResource, TaskStatus,
+    ResourcePool, ResourceSpan, ResourceWindow, Task, TaskResource, TaskStatus,
 )
 
 _EPS = 1e-6  # tolerance for float hour comparisons
@@ -265,6 +265,25 @@ def resource_spans(session: Session) -> dict[int, set[int]]:
     for row in session.exec(select(ResourceSpan)).all():
         spans.setdefault(row.resource_id, set()).add(row.spans_id)
     return spans
+
+
+def resource_pools(session: Session) -> dict[int, set[int]]:
+    """pool id → ids of its member lanes (see ResourcePool)."""
+    pools: dict[int, set[int]] = {}
+    for row in session.exec(select(ResourcePool)).all():
+        pools.setdefault(row.pool_id, set()).add(row.member_id)
+    return pools
+
+
+def pools_of(session: Session, resource_id: int) -> set[int]:
+    """Pools that `resource_id` is a member of — its runner claims their tasks too."""
+    return set(session.exec(
+        select(ResourcePool.pool_id).where(ResourcePool.member_id == resource_id)
+    ).all())
+
+
+def _overlaps(intervals: list[Interval], start: datetime, end: datetime) -> bool:
+    return any(s < end and start < e for s, e in intervals)
 
 
 def conflict_map(spans: dict[int, set[int]], resource_ids: Iterable[int]) -> dict[int, set[int]]:
@@ -562,6 +581,16 @@ def reflow_schedule(session: Session) -> dict:
     # (spanning lanes), so the board never promises overlapping lane times.
     spans = resource_spans(session)
     conflicts = conflict_map(spans, resources)
+    pools = {pid: {m for m in members if m in resources}
+             for pid, members in resource_pools(session).items()}
+
+    def lane_choices(rids: list[int]) -> list[list[int]]:
+        """The lane sets a task could run on: each pool swapped for one member."""
+        choices: list[list[int]] = [[]]
+        for r in rids:
+            alts = sorted(pools[r]) if pools.get(r) else [r]
+            choices = [c + [a] for c in choices for a in alts]
+        return choices
 
     def occupy(rid: int, iv: Interval) -> None:
         busy[rid].append(iv)
@@ -612,6 +641,12 @@ def reflow_schedule(session: Session) -> dict:
             continue
         if t.status in FIXED or (t.status == TaskStatus.todo and t.pinned):
             for rid in res_by_task.get(t.id, []):
+                if pools.get(rid):
+                    # A pinned pool task keeps its time, not a card: hold the
+                    # first member free then (any member, if none is).
+                    members = sorted(pools[rid])
+                    rid = next((m for m in members
+                                if not _overlaps(busy[m], t.start_date, t.end_date)), members[0])
                 if rid in busy:
                     occupy(rid, (t.start_date, t.end_date))
             end_of[t.id] = t.end_date
@@ -665,10 +700,16 @@ def reflow_schedule(session: Session) -> dict:
             else:
                 earliest = now
             rids = [r for r in res_by_task.get(t.id, []) if r in resources]
-            slot = _earliest_slot(
-                [resources[r] for r in rids],
-                earliest, task_duration(t), busy, windows_by_res, blockouts_by_res,
-            )
+            # A pool task is planned on whichever member opens up first. That
+            # is a forecast only: the first member runner to ask claims it.
+            slot = None
+            for lanes in lane_choices(rids):
+                s = _earliest_slot(
+                    [resources[r] for r in lanes],
+                    earliest, task_duration(t), busy, windows_by_res, blockouts_by_res,
+                )
+                if s is not None and (slot is None or s < slot):
+                    slot, rids = s, lanes
             if slot is None:
                 unscheduled.append({"id": t.id, "title": t.title,
                                     "reason": "no availability within horizon"})

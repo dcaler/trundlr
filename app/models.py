@@ -67,6 +67,20 @@ class ResourceSpan(SQLModel, table=True):
     spans_id: int = Field(foreign_key="resource.id", primary_key=True)
 
 
+class ResourcePool(SQLModel, table=True):
+    """Join table: pool_id is a pool whose tasks run on whichever member lane is
+    free first (e.g. "GPU (any)" with members GPU 0 and GPU 1).
+
+    A pool has no runner of its own: each member's runner also claims the
+    pool's tasks, and claiming moves the task from the pool to that lane (see
+    app.routers.runner), so everything that looks at a lane — conflicts,
+    settle time, draining — works unchanged. Re-flow plans a pool task on the
+    member with the earliest opening.
+    """
+    pool_id: int = Field(foreign_key="resource.id", primary_key=True)
+    member_id: int = Field(foreign_key="resource.id", primary_key=True)
+
+
 class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     timezone: str = Field(default="UTC")
@@ -126,6 +140,9 @@ class Task(SQLModel, table=True):
     # whatever later re-flows do to its planned start.
     eligible_since: Optional[datetime] = Field(default=None)
     drain_since: Optional[datetime] = Field(default=None)
+    # The pool this task was claimed from, so resetting it to todo puts it back
+    # on the pool rather than leaving it on the lane that happened to take it.
+    pool_id: Optional[int] = Field(default=None, foreign_key="resource.id")
 
     project: Optional[Project] = Relationship(back_populates="tasks")
 

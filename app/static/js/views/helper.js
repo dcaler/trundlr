@@ -9,16 +9,20 @@ registerView('/helper', async (el) => {
     computeResources = all.filter(r => r.kind === 'cpu' || r.kind === 'gpu');
     runnerFolder = settings.runner_folder || null;
   } catch (_) {}
-  // CPU before GPU; spanning lanes (e.g. GPU 0+1) after the lanes they span;
-  // then by name, numbers compared as numbers.
+  // CPU before GPU; spanning lanes (e.g. GPU 0+1) after the lanes they span,
+  // then pools; then by name, numbers compared as numbers.
   const kindOrder = { cpu: 0, gpu: 1 };
-  const spans = r => (r.spans_ids || []).length > 0 ? 1 : 0;
+  const isPool = r => (r.member_ids || []).length > 0;
+  const group = r => isPool(r) ? 2 : (r.spans_ids || []).length > 0 ? 1 : 0;
   computeResources.sort((a, b) =>
     (kindOrder[a.kind] - kindOrder[b.kind]) ||
-    (spans(a) - spans(b)) ||
+    (group(a) - group(b)) ||
     a.name.localeCompare(b.name, undefined, { numeric: true })
   );
   const nameById = Object.fromEntries(computeResources.map(r => [r.id, r.name]));
+  const names = ids => escHtml(ids.map(id => nameById[id] || `#${id}`).join(', '));
+  // A pool has no runner of its own: its members' runners claim its tasks.
+  const runnerResources = computeResources.filter(r => !isPool(r));
 
   const apiUrl = window.location.origin;
   const pre = (code) =>
@@ -27,14 +31,15 @@ registerView('/helper', async (el) => {
   const resourceTable = computeResources.length === 0
     ? '<p style="color:var(--text-muted)">No cpu/gpu resources defined yet — add them in the Resources tab.</p>'
     : `<table style="margin-top:0.5rem">
-        <thead><tr><th>ID</th><th>Name</th><th>Kind</th><th>Spans</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Kind</th><th>Spans / pool of</th></tr></thead>
         <tbody>
           ${computeResources.map(r => `
             <tr>
               <td><code style="font-size:1rem;font-weight:700">${escHtml(String(r.id))}</code></td>
               <td>${escHtml(r.name)}</td>
               <td>${escHtml(r.kind)}</td>
-              <td>${(r.spans_ids || []).length ? escHtml(r.spans_ids.map(id => nameById[id] || `#${id}`).join(', ')) : '—'}</td>
+              <td>${isPool(r) ? `pool of ${names(r.member_ids)} — no runner; their runners take its tasks`
+                : (r.spans_ids || []).length ? names(r.spans_ids) : '—'}</td>
             </tr>`).join('')}
         </tbody>
       </table>`;
@@ -53,9 +58,9 @@ registerView('/helper', async (el) => {
   const cdLine = runnerFolder
     ? `cd ${shQuote(runnerFolder)}`
     : '# cd into the folder containing runner.py (set "Runner folder" in Settings to fill this in)';
-  const screenCmds = computeResources.length === 0
+  const screenCmds = runnerResources.length === 0
     ? '# (no cpu/gpu resources defined yet)'
-    : computeResources.map(r => {
+    : runnerResources.map(r => {
         const slug = r.name.toLowerCase().replace(/\s+/g, '_');
         const env = [
           `RUNNER_RESOURCE_ID=${r.id}`,
@@ -73,9 +78,9 @@ ${env.join(' \\\n')} \\
 python3 runner.py 2>&1 | tee ${shQuote(`logs/runner-${slug}.log`)}`;
       }).join('\n\n');
 
-  const attachCmds = computeResources.length === 0
+  const attachCmds = runnerResources.length === 0
     ? '# (no runners to attach to)'
-    : computeResources.map(r => {
+    : runnerResources.map(r => {
         const slug = r.name.toLowerCase().replace(/\s+/g, '_');
         return `screen -r trundlr_${slug}   # attach to ${r.name} runner`;
       }).join('\n');

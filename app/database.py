@@ -273,6 +273,8 @@ def apply_migrations(engine):
         for col in ("eligible_since", "drain_since"):
             if col not in task_cols2:
                 conn.execute(text(f"ALTER TABLE task ADD COLUMN {col} DATETIME"))
+        if "pool_id" not in task_cols2:
+            conn.execute(text("ALTER TABLE task ADD COLUMN pool_id INTEGER REFERENCES resource(id)"))
         if "eligible_since" not in task_cols2:
             _backfill_eligible_since(conn)
         conn.commit()

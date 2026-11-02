@@ -11,7 +11,8 @@ from app.database import get_db
 from app.models import AppSettings, Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
 from app.reflow import SCHEDULE_LOCK, run_reflow
 from app.scheduling import (
-    conflicting_resource_ids, is_blocked_at, spanning_resource_ids, task_duration,
+    conflicting_resource_ids, is_blocked_at, pools_of, resource_pools, spanning_resource_ids,
+    task_duration,
 )
 from app.schemas import RunnerClaimRead
 from app.validation import DBId
@@ -49,16 +50,19 @@ def _next_candidate(
 ) -> tuple[Optional[Task], str]:
     """The task a runner for this resource would claim next, or (None, idle reason).
 
-    Walks queued tasks with a command in start_date order, skipping any whose
+    Queued tasks are the resource's own plus those on any pool it is a member
+    of. Walks queued tasks with a command in start_date order, skipping any whose
     dependency isn't done, so unrelated tasks can run past a chain blocked by a
     failed upstream. With `fits`, also skips tasks it rejects (idle reason
     `yield_reason`), so shorter work further down the queue can still run.
     """
+    queues = [resource_id, *pools_of(session, resource_id)]
     candidates = session.exec(
         select(Task)
         .join(TaskResource, Task.id == TaskResource.task_id)
-        .where(TaskResource.resource_id == resource_id)
+        .where(TaskResource.resource_id.in_(queues))
         .where(Task.status == TaskStatus.todo)
+        .distinct()
         .where(Task.command.isnot(None))
         .where(Task.command != "")
         .order_by(nullslast(Task.start_date))
@@ -170,6 +174,9 @@ def _claim(resource_id: int, session: Session):
         raise HTTPException(status_code=404, detail="Resource not found")
     if resource.kind not in (ResourceKind.cpu, ResourceKind.gpu):
         raise HTTPException(status_code=422, detail="Runner only manages cpu/gpu resources")
+    if resource_id in resource_pools(session):
+        raise HTTPException(status_code=422,
+                            detail="A pool has no runner: its member lanes' runners claim its tasks")
 
     # Don't claim if a task is already running or paused on this resource.
     # The runner is single-threaded: one task at a time regardless of capacity.
@@ -216,6 +223,7 @@ def _claim(resource_id: int, session: Session):
         task.end_date = now + dur
     task.start_date = now
     task.drain_since = None
+    _take_from_pool(session, task, resource_id)
     session.add(task)
     session.commit()
     # A task that starts earlier or later than planned moves everything behind
@@ -238,6 +246,18 @@ def _claim(resource_id: int, session: Session):
         resource_ids=rids,
         project_directory=project.folder if project else None,
     )
+
+
+def _take_from_pool(session: Session, task: Task, lane_id: int) -> None:
+    """Move a claimed pool task onto the lane that claimed it, remembering the
+    pool so a reset puts it back (see tasks.update_task)."""
+    for tr in session.exec(select(TaskResource).where(TaskResource.task_id == task.id)).all():
+        if tr.resource_id in pools_of(session, lane_id):
+            task.pool_id = tr.resource_id
+            session.delete(tr)
+            session.flush()
+            if not session.get(TaskResource, (task.id, lane_id)):
+                session.add(TaskResource(task_id=task.id, resource_id=lane_id))
 
 
 @router.post("/{resource_id}/reset-stale")

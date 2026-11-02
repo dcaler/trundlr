@@ -83,6 +83,7 @@ class ResourceCreate(BaseModel):
     available_to: str = "17:00"
     available_days: int = 31  # Mon-Fri bitmask
     spans_ids: list[BodyId] = []  # lanes this resource is built from (see ResourceSpan)
+    member_ids: list[BodyId] = []  # lanes that serve this pool (see ResourcePool)
     runner_env: Optional[str] = None
 
     @field_validator("runner_env")
@@ -110,6 +111,7 @@ class ResourceUpdate(BaseModel):
     available_to: Optional[str] = None
     available_days: Optional[int] = None
     spans_ids: Optional[list[BodyId]] = None
+    member_ids: Optional[list[BodyId]] = None
     runner_env: Optional[str] = None
 
     @field_validator("runner_env")
@@ -126,6 +128,7 @@ class ResourceRead(BaseModel):
     available_to: str
     available_days: int
     spans_ids: list[int] = []
+    member_ids: list[int] = []
     runner_env: Optional[str] = None
 
     model_config = {"from_attributes": True}
@@ -192,6 +195,7 @@ class TaskRead(BaseModel):
     depends_on_id: Optional[int] = None
     pinned: bool = False
     dependency_broken: bool = False
+    pool_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
