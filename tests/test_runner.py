@@ -104,3 +104,91 @@ def test_sub_second_duration_is_accepted_by_server_schema():
     from app.schemas import TaskUpdate
     duration = max(round(0.15 / 3600, 4), runner.MIN_DURATION_H)
     assert TaskUpdate(duration=duration).duration > 0
+
+
+def test_report_result_returns_whether_it_got_through(monkeypatch):
+    for fails, ok in ((0, True), (1, True), (2, False)):
+        api, _ = _fake_api(fail_first=fails)
+        monkeypatch.setattr(runner, "_api", api)
+        assert runner._report_result("http://x", 7, _RESULT) is ok
+
+
+# ── Lost claim replies ───────────────────────────────────────────────────────
+
+def _run_main(monkeypatch, tmp_path, script):
+    """Run runner.main() against a scripted _api. `script` maps each call, in
+    order, to a return value or an exception; the loop stops once it runs out.
+    Returns the (method, path, body) of every call."""
+    calls = []
+    steps = iter(script)
+
+    def api(base_url, method, path, body=None):
+        calls.append((method, path, body))
+        if method == "GET" or path.endswith("/reset-stale"):
+            return None, None
+        if method == "PATCH" and body and set(body) == {"log_tail"}:
+            return None, None
+        try:
+            step = next(steps)
+        except StopIteration:
+            runner._shutdown = True
+            return None, "done"
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    monkeypatch.setattr(runner, "_api", api)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    monkeypatch.setattr(runner, "_shutdown", False)
+    monkeypatch.setattr("sys.argv", ["runner.py", "--resource-id", "3",
+                                     "--log-dir", str(tmp_path / "logs")])
+    runner.main()
+    return calls
+
+
+def _claims(calls):
+    return [p for m, p, _ in calls if m == "POST" and "/claim" in p]
+
+
+def test_claim_after_a_timeout_asks_for_the_lost_task_back(monkeypatch, tmp_path):
+    task = {"id": 1493, "title": "t", "command": "true", "project_directory": str(tmp_path)}
+    calls = _run_main(monkeypatch, tmp_path, [
+        TimeoutError("timed out"),      # claim: reply lost
+        (task, None),                   # claim?after_error: same task handed back
+        (None, None),                   # result PATCH
+    ])
+    claims = _claims(calls)
+    assert claims[0] == "/runner/3/claim"
+    assert claims[1] == "/runner/3/claim?after_error=true"
+    assert claims[2] == "/runner/3/claim"  # flag cleared after a reply
+    assert ("PATCH", "/tasks/1493") in [(m, p) for m, p, _ in calls]
+
+
+def test_unreported_task_is_re_reported_not_re_run(monkeypatch, tmp_path):
+    marker = tmp_path / "ran"
+    task = {"id": 7, "title": "t", "command": f"echo x >> {marker}",
+            "project_directory": str(tmp_path)}
+    boom = RuntimeError("API PATCH → HTTP 500")
+    calls = _run_main(monkeypatch, tmp_path, [
+        (task, None),                   # claim
+        boom, boom,                     # both result PATCHes fail
+        TimeoutError("timed out"),      # claim: reply lost
+        (task, None),                   # after_error hands the same task back
+        (None, None),                   # re-sent result gets through
+        (None, "busy:7"),               # (not reached once reported)
+    ])
+    assert marker.read_text() == "x\n"  # ran once only
+    patches = [b for m, p, b in calls if m == "PATCH" and p == "/tasks/7" and "status" in b]
+    assert len(patches) == 3 and patches[-1]["status"] == "done"
+
+
+def test_busy_with_an_unreported_task_re_sends_its_result(monkeypatch, tmp_path):
+    task = {"id": 7, "title": "t", "command": "true", "project_directory": str(tmp_path)}
+    boom = RuntimeError("API PATCH → HTTP 500")
+    calls = _run_main(monkeypatch, tmp_path, [
+        (task, None), boom, boom,       # ran, report lost
+        (None, "busy:7"),               # server still sees it running
+        (None, None),                   # re-sent result gets through
+    ])
+    patches = [b for m, p, b in calls if m == "PATCH" and p == "/tasks/7" and "status" in b]
+    assert len(patches) == 3

@@ -119,3 +119,34 @@ def test_claim_succeeds_once_block_window_has_passed(client, project_id, gpu_id)
 
     claim = client.post(f"/api/runner/{gpu_id}/claim")
     assert claim.status_code == 200
+
+
+# ── Lost claim replies ───────────────────────────────────────────────────────
+# A runner whose claim times out after the server committed it would otherwise
+# leave the task in_progress with nothing running it, and the lane idle forever.
+
+def test_busy_lane_reports_which_task(client, project_id, gpu_id):
+    tid = _make_runnable_task(client, project_id, gpu_id)
+    assert client.post(f"/api/runner/{gpu_id}/claim").status_code == 200
+    resp = client.post(f"/api/runner/{gpu_id}/claim")
+    assert resp.status_code == 204
+    assert resp.headers["X-Runner-Idle"] == f"busy:{tid}"
+
+
+def test_claim_after_error_hands_back_the_lost_task(client, project_id, gpu_id):
+    tid = _make_runnable_task(client, project_id, gpu_id)
+    _make_runnable_task(client, project_id, gpu_id)
+    assert client.post(f"/api/runner/{gpu_id}/claim").json()["id"] == tid  # reply "lost"
+    resp = client.post(f"/api/runner/{gpu_id}/claim?after_error=true")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == tid
+    assert resp.json()["status"] == "in_progress"
+
+
+def test_claim_after_error_leaves_a_paused_task_alone(client, project_id, gpu_id):
+    tid = _make_runnable_task(client, project_id, gpu_id)
+    client.post(f"/api/runner/{gpu_id}/claim")
+    assert client.patch(f"/api/tasks/{tid}", json={"status": "paused"}).status_code == 200
+    resp = client.post(f"/api/runner/{gpu_id}/claim?after_error=true")
+    assert resp.status_code == 204
+    assert resp.headers["X-Runner-Idle"] == f"busy:{tid}"

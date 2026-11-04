@@ -99,18 +99,32 @@ MIN_DURATION_H = 0.0001
 _ESSENTIAL_FIELDS = ("status", "exit_code", "end_date")
 
 
-def _report_result(base_url: str, task_id: int, result: dict) -> None:
-    """PATCH a finished task's result, falling back to the essential fields."""
+def _report_result(base_url: str, task_id: int, result: dict) -> bool:
+    """PATCH a finished task's result, falling back to the essential fields.
+
+    Returns False if neither PATCH got through (the task stays in_progress)."""
     try:
         _api(base_url, "PATCH", f"/tasks/{task_id}", result)
-        return
+        return True
     except Exception as e:
         _log(f"Warning: PATCH failed: {e} — retrying with status only")
     essential = {k: result[k] for k in _ESSENTIAL_FIELDS if k in result}
     try:
         _api(base_url, "PATCH", f"/tasks/{task_id}", essential)
+        return True
     except Exception as e:
         _log(f"Warning: status-only PATCH failed: {e} — task {task_id} may stay in_progress")
+        return False
+
+
+def _busy_task_id(idle_reason: str):
+    """The task id in a "busy:<id>" idle reason, else None."""
+    if idle_reason.startswith("busy:"):
+        try:
+            return int(idle_reason.split(":", 1)[1])
+        except ValueError:
+            return None
+    return None
 
 
 def _tail(path: Path, n: int) -> str:
@@ -191,15 +205,33 @@ def main() -> None:
         _log(f"Warning: reset-stale failed: {e}")
 
     last_idle: str = ""
+    # Set when a claim got no reply: the server may have committed it anyway,
+    # so the next claim asks for that task back (see claim_next_task).
+    claim_lost = False
+    # Results this runner could not deliver, by task id. Such a task is still
+    # in_progress on the server; it is re-reported, never re-run.
+    unreported: dict[int, dict] = {}
     while not _shutdown:
         # ── Claim next task ────────────────────────────────────────────────
+        path = f"/runner/{resource_id}/claim" + ("?after_error=true" if claim_lost else "")
         try:
-            task, idle_reason = _api(base_url, "POST", f"/runner/{resource_id}/claim")
+            task, idle_reason = _api(base_url, "POST", path)
         except Exception as e:
+            claim_lost = True
             if str(e) != last_idle:
                 _log(f"Claim error: {e} — retrying in {poll_interval}s")
                 last_idle = str(e)
             time.sleep(poll_interval)
+            continue
+        claim_lost = False
+
+        stuck_id = task["id"] if task else _busy_task_id(idle_reason or "")
+        if stuck_id in unreported:
+            _log(f"Task {stuck_id} already ran here — re-sending its result")
+            if _report_result(base_url, stuck_id, unreported[stuck_id]):
+                del unreported[stuck_id]
+            else:
+                time.sleep(poll_interval)
             continue
 
         if task is None:
@@ -295,13 +327,15 @@ def main() -> None:
         _log(f"Task {task_id} → {status}  exit={exit_code}  duration={duration_h:.3f}h")
 
         # ── Write results back ─────────────────────────────────────────────
-        _report_result(base_url, task_id, {
+        result = {
             "status": status,
             "exit_code": exit_code,
             "end_date": actual_end.strftime("%Y-%m-%dT%H:%M:%S"),
             "duration": max(round(duration_h, 4), MIN_DURATION_H),
             "log_tail": tail,
-        })
+        }
+        if not _report_result(base_url, task_id, result):
+            unreported[task_id] = result
 
         # No sleep — immediately check for the next task.
 

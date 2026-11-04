@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, nullslast
 from sqlmodel import Session, select
 
@@ -157,7 +157,13 @@ def _settling(session: Session, resource_id: int, now: datetime) -> Optional[tup
 
 
 @router.post("/{resource_id}/claim")
-def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db)):
+def claim_next_task(
+    resource_id: int = DBId(),
+    after_error: bool = Query(False, description=(
+        "Set by a runner whose previous claim got no reply (e.g. timed out). "
+        "If that claim did go through, the task it took is handed back.")),
+    session: Session = Depends(get_db),
+):
     """Atomically claim the next queued task for a cpu/gpu resource.
 
     Returns the task with project context (200) or 204 if nothing can be claimed,
@@ -165,10 +171,19 @@ def claim_next_task(resource_id: int = DBId(), session: Session = Depends(get_db
     in_progress and records the actual start time.
     """
     with SCHEDULE_LOCK:
-        return _claim(resource_id, session)
+        return _claim(resource_id, session, after_error)
 
 
-def _claim(resource_id: int, session: Session):
+def _claim_read(task: Task, session: Session) -> RunnerClaimRead:
+    project = session.get(Project, task.project_id)
+    return RunnerClaimRead(
+        **task.model_dump(),
+        resource_ids=_resource_ids(task.id, session),
+        project_directory=project.folder if project else None,
+    )
+
+
+def _claim(resource_id: int, session: Session, after_error: bool = False):
     resource = session.get(Resource, resource_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -180,8 +195,19 @@ def _claim(resource_id: int, session: Session):
 
     # Don't claim if a task is already running or paused on this resource.
     # The runner is single-threaded: one task at a time regardless of capacity.
-    if _active_task(session, resource_id):
-        return Response(status_code=204)
+    active = _active_task(session, resource_id)
+    if active:
+        # A claim whose reply was lost (the runner timed out while the server
+        # committed it) leaves a task in_progress that nothing is running. The
+        # runner says so on its next claim; hand the same task back rather than
+        # leaving the lane idle behind it forever. (A task the runner finished
+        # but could not report also sits in_progress; the runner recognises its
+        # own unreported tasks and re-sends the result instead of re-running.)
+        if after_error and active.status == TaskStatus.in_progress:
+            logger.warning("re-handing task %s to resource %s after a lost claim reply",
+                           active.id, resource_id)
+            return _claim_read(active, session)
+        return Response(status_code=204, headers={"X-Runner-Idle": f"busy:{active.id}"})
 
     now = _now_naive(session)
     if is_blocked_at(session, resource_id, now):
@@ -237,15 +263,7 @@ def _claim(resource_id: int, session: Session):
         session.rollback()
         logger.exception("re-flow after claiming task %s failed", task.id)
     session.refresh(task)
-
-    project = session.get(Project, task.project_id)
-    rids = _resource_ids(task.id, session)
-
-    return RunnerClaimRead(
-        **task.model_dump(),
-        resource_ids=rids,
-        project_directory=project.folder if project else None,
-    )
+    return _claim_read(task, session)
 
 
 def _take_from_pool(session: Session, task: Task, lane_id: int) -> None:
