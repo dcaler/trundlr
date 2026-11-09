@@ -148,7 +148,7 @@ def test_migration_backdates_eligible_since(temp_db):
     from datetime import datetime
     from sqlalchemy import text
     from app.database import apply_migrations
-    from app.models import Project, Task, TaskStatus
+    from app.models import Project, Task, TaskDependency, TaskStatus
 
     engine = get_engine(temp_db)
     create_db_and_tables(engine)
@@ -159,13 +159,16 @@ def test_migration_backdates_eligible_since(temp_db):
             Task(id=1, title="old todo", project_id=1),
             Task(id=2, title="dep", project_id=1, status=TaskStatus.done,
                  start_date=d(2026, 10, 1, 9), end_date=d(2026, 10, 3, 9)),
-            Task(id=3, title="after dep", project_id=1, depends_on_id=2),
+            Task(id=3, title="after dep", project_id=1),
             Task(id=5, title="ran", project_id=1, status=TaskStatus.in_progress,
                  start_date=d(2026, 10, 2, 9), end_date=d(2026, 10, 9, 9)),
             Task(id=6, title="newest todo", project_id=1),
         ])
         s.commit()
-        s.add(Task(id=4, title="waits", project_id=1, depends_on_id=5))
+        s.add(Task(id=4, title="waits", project_id=1))
+        s.commit()
+        s.add_all([TaskDependency(task_id=3, depends_on_id=2),
+                   TaskDependency(task_id=4, depends_on_id=5)])
         s.commit()
     with engine.connect() as c:
         c.execute(text("ALTER TABLE task DROP COLUMN eligible_since"))
@@ -178,6 +181,38 @@ def test_migration_backdates_eligible_since(temp_db):
     assert got[4] is None                 # dependency still running
     assert got[6] is None                 # nothing later has run: re-flow stamps it
     assert got[2] is None and got[5] is None
+
+
+def test_migration_moves_single_dependency_to_join_table(temp_db):
+    """An old DB's task.depends_on_id becomes a taskdependency row, once: the
+    column is emptied, so a re-run doesn't restore a link removed since."""
+    from sqlalchemy import text
+    from app.database import apply_migrations
+    from app.models import Project, Task, TaskDependency
+
+    engine = get_engine(temp_db)
+    create_db_and_tables(engine)
+    with Session(engine) as s:
+        s.add(Project(id=1, name="P"))
+        s.add_all([Task(id=i, title=f"t{i}", project_id=1) for i in (1, 2, 3)])
+        s.commit()
+    with engine.connect() as c:
+        c.execute(text("ALTER TABLE task ADD COLUMN depends_on_id INTEGER REFERENCES task(id)"))
+        c.execute(text("UPDATE task SET depends_on_id = 1 WHERE id = 2"))
+        c.execute(text("UPDATE task SET depends_on_id = 2 WHERE id = 3"))
+        c.commit()
+    apply_migrations(engine)
+    with Session(engine) as s:
+        links = {(r.task_id, r.depends_on_id) for r in s.exec(select(TaskDependency)).all()}
+        assert links == {(2, 1), (3, 2)}
+        s.delete(s.get(TaskDependency, (3, 2)))
+        s.commit()
+    apply_migrations(engine)
+    with Session(engine) as s:
+        links = {(r.task_id, r.depends_on_id) for r in s.exec(select(TaskDependency)).all()}
+    assert links == {(2, 1)}
+    with engine.connect() as c:
+        assert c.execute(text("SELECT COUNT(*) FROM task WHERE depends_on_id IS NOT NULL")).scalar() == 0
 
 
 def test_migration_adds_task_pool_id(temp_db):

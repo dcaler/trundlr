@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.database import get_db
+from app.dependencies import dependency_fields, dependency_ids
 from app.models import (
     CycleStep,
     CycleStepResource,
@@ -13,6 +14,7 @@ from app.models import (
     Project,
     Resource,
     Task,
+    TaskDependency,
     TaskResource,
     TaskStatus,
 )
@@ -231,10 +233,11 @@ def instantiate_cycle(
             command=step.command,
             status=TaskStatus.todo,
             project_id=data.project_id,
-            depends_on_id=prev_id,  # chain each step to the previous; first is None
         )
         session.add(task)
         session.flush()
+        if prev_id is not None:  # chain each step to the previous one
+            session.add(TaskDependency(task_id=task.id, depends_on_id=prev_id))
         for rid in _step_resource_ids(step.id, session):
             session.add(TaskResource(task_id=task.id, resource_id=rid))
         prev_id = task.id
@@ -249,6 +252,7 @@ def instantiate_cycle(
             resource_ids=list(session.exec(
                 select(TaskResource.resource_id).where(TaskResource.task_id == t.id)
             ).all()),
+            **dependency_fields(dependency_ids(session, t.id)),
         )
         for t in created
     ]

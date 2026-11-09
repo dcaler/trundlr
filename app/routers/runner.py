@@ -8,6 +8,7 @@ from sqlalchemy import func, nullslast
 from sqlmodel import Session, select
 
 from app.database import get_db
+from app.dependencies import dependency_fields, dependency_ids, unmet_dependencies
 from app.models import AppSettings, Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
 from app.reflow import SCHEDULE_LOCK, run_reflow
 from app.scheduling import (
@@ -71,11 +72,14 @@ def _next_candidate(
 
     idle_reason = "empty-queue"
     for candidate in candidates:
-        if candidate.depends_on_id is not None:
-            dep = session.get(Task, candidate.depends_on_id)
-            if dep is None or dep.status != TaskStatus.done:
-                if idle_reason == "empty-queue" and dep is not None:
-                    idle_reason = f"waiting-dep:{candidate.id}:{dep.id}:{dep.status}"
+        dep_ids = dependency_ids(session, candidate.id)
+        if dep_ids:
+            deps = {d: t for d in dep_ids if (t := session.get(Task, d)) is not None}
+            unmet = unmet_dependencies(dep_ids, deps)
+            if unmet:
+                first = deps.get(unmet[0])
+                if idle_reason == "empty-queue" and first is not None:
+                    idle_reason = f"waiting-dep:{candidate.id}:{first.id}:{first.status}"
                 continue
         if fits and not fits(candidate):
             idle_reason = yield_reason
@@ -179,6 +183,7 @@ def _claim_read(task: Task, session: Session) -> RunnerClaimRead:
     return RunnerClaimRead(
         **task.model_dump(),
         resource_ids=_resource_ids(task.id, session),
+        **dependency_fields(dependency_ids(session, task.id)),
         project_directory=project.folder if project else None,
     )
 

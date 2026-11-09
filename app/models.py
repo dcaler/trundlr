@@ -124,17 +124,14 @@ class Task(SQLModel, table=True):
 
     # A task must belong to a project; resource assignments live in TaskResource.
     project_id: int = Field(foreign_key="project.id", nullable=False, index=True)
-    # Optional predecessor: this task should start after depends_on finishes.
-    depends_on_id: Optional[int] = Field(
-        default=None, foreign_key="task.id", index=True
-    )
+    # Predecessors live in TaskDependency: a task waits for all of them.
     # When true, re-align skips this task and schedules around its existing dates.
     pinned: bool = Field(default=False)
-    # Set when this task's predecessor was deleted: its depends_on_id is cleared
-    # and status forced to blocked, signalling the user to pick a new dependency.
+    # Set when one of this task's dependencies was deleted: that link is removed
+    # and status forced to blocked, signalling the user to review its dependencies.
     dependency_broken: bool = Field(default=False)
     # Scheduler bookkeeping, both naive app-timezone datetimes (see reflow).
-    # eligible_since: when this todo task last became ready (dependency done);
+    # eligible_since: when this todo task last became ready (dependencies done);
     # drives age priority. drain_since: when this task on a spanning lane first
     # came due; from then on the lanes it spans stop claiming until it starts,
     # whatever later re-flows do to its planned start.
@@ -151,6 +148,12 @@ class TaskResource(SQLModel, table=True):
     """Join table: a task may be assigned to multiple resources."""
     task_id: int = Field(foreign_key="task.id", primary_key=True)
     resource_id: int = Field(foreign_key="resource.id", primary_key=True)
+
+
+class TaskDependency(SQLModel, table=True):
+    """Join table: task_id waits until every task it depends on is done."""
+    task_id: int = Field(foreign_key="task.id", primary_key=True)
+    depends_on_id: int = Field(foreign_key="task.id", primary_key=True, index=True)
 
 
 class CycleTemplate(SQLModel, table=True):

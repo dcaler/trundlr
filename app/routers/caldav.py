@@ -12,6 +12,7 @@ from icalendar import Calendar, Event
 from sqlmodel import Session, select
 
 from app.database import get_db
+from app.dependencies import unlink_deleted_task
 from app.models import AppSettings, Project, Resource, ResourceCalBlock, Task, TaskResource, TaskStatus
 from app.scheduling import available_intervals_on
 
@@ -976,14 +977,7 @@ def caldav_delete_event(cal: str, uid_file: str, session: Session = Depends(get_
 
     # Any task that depends on this one would dangle (and the FK delete would
     # 500 — see app.routers.tasks.delete_task), so clear the link the same way.
-    dependents = session.exec(
-        select(Task).where(Task.depends_on_id == task_id)
-    ).all()
-    for dep in dependents:
-        dep.depends_on_id = None
-        dep.status = TaskStatus.blocked
-        dep.dependency_broken = True
-        session.add(dep)
+    unlink_deleted_task(session, task_id)
 
     for tr in session.exec(select(TaskResource).where(TaskResource.task_id == task_id)).all():
         session.delete(tr)

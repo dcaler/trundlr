@@ -63,10 +63,6 @@ def apply_migrations(engine):
         # Promote date-only strings to full datetime strings so SQLAlchemy's
         # DateTime processor can parse them after the start_date/end_date type
         # was changed from date → datetime.
-        if "depends_on_id" not in task_cols:
-            conn.execute(text("ALTER TABLE task ADD COLUMN depends_on_id INTEGER REFERENCES task(id)"))
-            conn.commit()
-
         if "description" not in task_cols:
             conn.execute(text("ALTER TABLE task ADD COLUMN description TEXT"))
             conn.commit()
@@ -259,6 +255,8 @@ def apply_migrations(engine):
             conn.execute(text("ALTER TABLE project DROP COLUMN directory"))
             conn.commit()
 
+        _migrate_single_dependency(conn)
+
         result = conn.execute(text("PRAGMA table_info(task)"))
         task_cols2 = {row[1] for row in result}
         if "command" not in task_cols2:
@@ -280,6 +278,27 @@ def apply_migrations(engine):
         conn.commit()
 
 
+def _migrate_single_dependency(conn) -> None:
+    """Move the old single task.depends_on_id into the taskdependency table.
+
+    The column stays (SQLite can't drop a referenced column cheaply) but is
+    emptied once copied, so re-running never re-adds a link removed since.
+    """
+    tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+    if "taskdependency" not in tables:
+        return
+    cols = {row[1] for row in conn.execute(text("PRAGMA table_info(task)"))}
+    if "depends_on_id" not in cols:
+        return
+    conn.execute(text("""
+        INSERT OR IGNORE INTO taskdependency (task_id, depends_on_id)
+        SELECT id, depends_on_id FROM task
+        WHERE depends_on_id IS NOT NULL AND depends_on_id IN (SELECT id FROM task)
+    """))
+    conn.execute(text("UPDATE task SET depends_on_id = NULL WHERE depends_on_id IS NOT NULL"))
+    conn.commit()
+
+
 def _backfill_eligible_since(conn) -> None:
     """Estimate how long each ready todo task has already waited, so age
     priority applies from the first re-flow rather than a week later.
@@ -287,13 +306,16 @@ def _backfill_eligible_since(conn) -> None:
     Tasks have no creation time, but ids only grow and a claimed task's
     start_date is when it actually ran. So a task was created no later than the
     earliest start of any higher-id task that has run: a lower bound on its
-    wait. If its dependency finished later than that, it was ready from then.
+    wait. If its dependencies finished later than that, it was ready from then.
     Tasks with no such bound are left for re-flow to stamp with the current time.
     """
     rows = conn.execute(text(
-        "SELECT id, status, depends_on_id, start_date, end_date FROM task ORDER BY id"
+        "SELECT id, status, start_date, end_date FROM task ORDER BY id"
     )).all()
     by_id = {r.id: r for r in rows}
+    deps_of: dict[int, list[int]] = {}
+    for task_id, dep_id in conn.execute(text("SELECT task_id, depends_on_id FROM taskdependency")):
+        deps_of.setdefault(task_id, []).append(dep_id)
 
     def ts(value):
         return datetime.fromisoformat(value) if isinstance(value, str) else value
@@ -311,10 +333,10 @@ def _backfill_eligible_since(conn) -> None:
         if r.status != "todo" or r.id not in started_after:
             continue
         since = started_after[r.id]
-        if r.depends_on_id is not None:
-            dep = by_id.get(r.depends_on_id)
-            if dep is None or dep.status != "done":
-                continue
+        deps = [by_id.get(d) for d in deps_of.get(r.id, [])]
+        if any(dep is None or dep.status != "done" for dep in deps):
+            continue
+        for dep in deps:
             if dep.end_date:
                 since = max(since, ts(dep.end_date))
         conn.execute(text("UPDATE task SET eligible_since = :s WHERE id = :id"),

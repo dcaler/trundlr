@@ -10,6 +10,39 @@ function registerView(path, renderFn) {
   views[path] = renderFn;
 }
 
+// ── Task dependencies (a task waits for all of them) ─────────────────────
+
+/** Ids of the tasks `t` depends on (falls back to the deprecated single field). */
+function depIds(t) {
+  if (Array.isArray(t.depends_on_ids)) return t.depends_on_ids;
+  return t.depends_on_id ? [t.depends_on_id] : [];
+}
+
+/** True if any of `t`'s dependencies is not done (a missing one counts as not done). */
+function hasUnmetDeps(t, taskById) {
+  return depIds(t).some(id => taskById[id]?.status !== 'done');
+}
+
+/**
+ * One ✓/✗ line per dependency: the first `shown`, then "+N more" (all names
+ * in its tooltip). Empty string when the task has no dependencies.
+ */
+function depLinesHtml(t, taskById, shown = 2) {
+  const ids = depIds(t);
+  if (!ids.length) return '';
+  const line = id => {
+    const dep = taskById[id];
+    const met = dep?.status === 'done';
+    const name = dep ? dep.title : `#${id}`;
+    return `<div><span style="color:${met ? 'var(--success,#4caf50)' : 'var(--danger)'}" title="${met ? 'Dependency met' : 'Dependency not yet done'}">${met ? '✓' : '✗'}</span> ${escHtml(name)}</div>`;
+  };
+  const rest = ids.slice(shown);
+  const more = rest.length
+    ? `<div title="${escHtml(rest.map(id => taskById[id]?.title || `#${id}`).join('\n'))}">+${rest.length} more</div>`
+    : '';
+  return ids.slice(0, shown).map(line).join('') + more;
+}
+
 /** Escape a value for safe insertion into HTML. */
 function escHtml(str) {
   return String(str ?? '')

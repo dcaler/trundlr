@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
+from app.dependencies import dependency_map, unmet_dependencies
 from app.models import (
     AppSettings, Project, Resource, ResourceBlockout, ResourceCalBlock,
     ResourcePool, ResourceSpan, ResourceWindow, Task, TaskResource, TaskStatus,
@@ -563,6 +564,7 @@ def reflow_schedule(session: Session) -> dict:
     resources = {r.id: r for r in session.exec(select(Resource)).all()}
     tasks = list(session.exec(select(Task)).all())
     tasks_by_id = {t.id: t for t in tasks}
+    deps_of = dependency_map(session)
 
     res_by_task: dict[int, list[int]] = {}
     for tr in session.exec(select(TaskResource)).all():
@@ -613,12 +615,12 @@ def reflow_schedule(session: Session) -> dict:
         return any(r in spans for r in res_by_task.get(t.id, []))
 
     for t in tasks:
-        dep = tasks_by_id.get(t.depends_on_id) if t.depends_on_id else None
-        ready = t.status == TaskStatus.todo and (
-            t.depends_on_id is None or (dep is not None and dep.status == TaskStatus.done))
+        dep_ids = deps_of.get(t.id, [])
+        ready = t.status == TaskStatus.todo and not unmet_dependencies(dep_ids, tasks_by_id)
         if ready and t.eligible_since is None:
-            # Ready since its dependency finished, if that's known and past.
-            finished = dep.end_date if dep is not None else None
+            # Ready since its last dependency finished, if that's known and past.
+            ends = [tasks_by_id[d].end_date for d in dep_ids]
+            finished = max(ends) if ends and all(ends) else None
             t.eligible_since = finished if finished and finished <= now else now
             session.add(t)
         elif not ready and t.eligible_since is not None:
@@ -686,19 +688,18 @@ def reflow_schedule(session: Session) -> dict:
     unscheduled: list[dict] = []
 
     # Readiness loop: each pass places the single highest-priority task whose
-    # dependency is already resolved, then restarts so newly-unblocked dependents
+    # dependencies are all resolved, then restarts so newly-unblocked dependents
     # are reconsidered in priority order. Stops when no remaining task is ready.
     guard = 0
     while remaining and guard < 10000:
         guard += 1
         picked = None
         for t in remaining:
-            if t.depends_on_id is not None:
-                if t.depends_on_id not in end_of:
-                    continue  # dependency not (yet) placed — skip
-                earliest = max(now, end_of[t.depends_on_id])
-            else:
-                earliest = now
+            dep_ids = deps_of.get(t.id, [])
+            if any(d not in end_of for d in dep_ids):
+                continue  # a dependency is not (yet) placed — skip
+            # Starts after the last of its dependencies ends.
+            earliest = max([now, *(end_of[d] for d in dep_ids)])
             rids = [r for r in res_by_task.get(t.id, []) if r in resources]
             # A pool task is planned on whichever member opens up first. That
             # is a forecast only: the first member runner to ask claims it.
@@ -728,9 +729,8 @@ def reflow_schedule(session: Session) -> dict:
     # Anything still remaining never became ready: cyclic, or depends on a
     # blocked / unschedulable / deleted predecessor.
     for t in remaining:
-        dep = tasks_by_id.get(t.depends_on_id) if t.depends_on_id else None
-        reason = ("dependency was deleted" if (t.dependency_broken or
-                  (t.depends_on_id and dep is None))
+        missing = any(d not in tasks_by_id for d in deps_of.get(t.id, []))
+        reason = ("dependency was deleted" if (t.dependency_broken or missing)
                   else "blocked by an unscheduled dependency")
         unscheduled.append({"id": t.id, "title": t.title, "reason": reason})
 

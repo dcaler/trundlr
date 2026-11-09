@@ -14,7 +14,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.database import get_db
 from app.main import app
-from app.models import Project, Resource, ResourceKind, Task, TaskResource, TaskStatus
+from app.models import Project, Resource, ResourceKind, Task, TaskDependency, TaskResource, TaskStatus
 from app.scheduling import reflow_schedule
 
 
@@ -51,10 +51,12 @@ def _resource(s, name="R", kind=ResourceKind.human, days=127,
 def _task(s, project, resources, *, status=TaskStatus.todo, duration=1.0,
           depends_on=None, pinned=False, start=None, end=None, title="t"):
     t = Task(title=title, project_id=project.id, status=status, duration=duration,
-             depends_on_id=depends_on, pinned=pinned, start_date=start, end_date=end)
+             pinned=pinned, start_date=start, end_date=end)
     s.add(t)
     s.commit()
     s.refresh(t)
+    if depends_on is not None:
+        s.add(TaskDependency(task_id=t.id, depends_on_id=depends_on))
     for r in resources:
         s.add(TaskResource(task_id=t.id, resource_id=r.id))
     s.commit()
@@ -243,3 +245,38 @@ def test_reflow_endpoint(session):
     assert body["unscheduled"] == []
     session.refresh(t)
     assert t.start_date is not None
+
+
+# ── multiple dependencies ───────────────────────────────────────────────────
+
+def test_task_waits_for_the_last_of_several_dependencies(session):
+    p = _project(session, priority=2)
+    a_res = _resource(session, name="A")
+    b_res = _resource(session, name="B")
+    c_res = _resource(session, name="C")
+    short = _task(session, p, [a_res], duration=1.0, title="short")
+    long = _task(session, p, [b_res], duration=4.0, title="long")
+    after = _task(session, p, [c_res], duration=1.0, title="after both")
+    session.add_all([TaskDependency(task_id=after.id, depends_on_id=short.id),
+                     TaskDependency(task_id=after.id, depends_on_id=long.id)])
+    session.commit()
+
+    reflow_schedule(session)
+    session.commit()
+
+    assert after.start_date >= long.end_date
+    assert after.start_date >= short.end_date
+
+
+def test_one_blocked_dependency_of_several_leaves_task_unscheduled(session):
+    p = _project(session, priority=2)
+    r = _resource(session)
+    ok = _task(session, p, [r], title="ok")
+    stuck = _task(session, p, [r], status=TaskStatus.blocked, title="stuck")
+    waiting = _task(session, p, [r], title="waiting")
+    session.add_all([TaskDependency(task_id=waiting.id, depends_on_id=ok.id),
+                     TaskDependency(task_id=waiting.id, depends_on_id=stuck.id)])
+    session.commit()
+
+    result = reflow_schedule(session)
+    assert any(u["id"] == waiting.id for u in result["unscheduled"])

@@ -145,11 +145,19 @@ class TaskCreate(BaseModel):
     command: Optional[str] = None
     project_id: BodyId
     resource_ids: list[BodyId] = []
+    depends_on_ids: list[BodyId] = []
+    # Deprecated: one dependency, added to depends_on_ids. Use depends_on_ids.
     depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     duration: Optional[PositiveFloat] = None
     status: TaskStatus = TaskStatus.todo
+
+    def all_dependency_ids(self) -> list[int]:
+        ids = list(self.depends_on_ids)
+        if self.depends_on_id is not None and self.depends_on_id not in ids:
+            ids.append(self.depends_on_id)
+        return sorted(set(ids))
 
     @model_validator(mode="after")
     def end_after_start(self) -> "TaskCreate":
@@ -162,6 +170,9 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = None
     command: Optional[str] = None
     resource_ids: Optional[list[BodyId]] = None
+    # Replaces the task's dependencies ([] clears them).
+    depends_on_ids: Optional[list[BodyId]] = None
+    # Deprecated: sets exactly one dependency (null clears). Use depends_on_ids.
     depends_on_id: OptionalBodyId = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -193,6 +204,8 @@ class TaskSummary(BaseModel):
     exit_code: Optional[int] = None
     project_id: int
     resource_ids: list[int] = []
+    depends_on_ids: list[int] = []
+    # Deprecated: the lowest of depends_on_ids (null if none). Use depends_on_ids.
     depends_on_id: Optional[int] = None
     pinned: bool = False
     dependency_broken: bool = False

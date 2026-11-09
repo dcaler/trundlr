@@ -106,6 +106,8 @@ class TestInstantiate:
         # first step has no dependency; each subsequent depends on the previous
         assert tasks[0]["depends_on_id"] is None
         assert all(tasks[i]["depends_on_id"] == tasks[i - 1]["id"] for i in range(1, len(tasks)))
+        assert tasks[0]["depends_on_ids"] == []
+        assert all(tasks[i]["depends_on_ids"] == [tasks[i - 1]["id"]] for i in range(1, len(tasks)))
         # duration + command + resources copied from the template; no dates
         assert all(t["duration"] == 2.0 for t in tasks)
         assert all(t["resource_ids"] == [rid] for t in tasks)

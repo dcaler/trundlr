@@ -107,26 +107,69 @@ function setupResourceAutoStart(form, resourceById = {}) {
   });
 }
 
-// When a dependency task is selected, fill start_date from that task's end (or start).
-function setupDependencyAutoStart(form, taskById) {
-  const depEl       = form.querySelector('[name="depends_on_id"]');
+// Dependency picker: a filterable checklist (name="depends_on_ids") with the
+// chosen tasks shown above it. Done tasks are hidden unless "show done" is
+// ticked or they are already chosen. Ticking a task fills start_date from the
+// latest end (or start) among the chosen tasks, or now if that has passed.
+function setupDependencyPicker(form, taskById) {
+  const picker = form.querySelector('.dep-picker');
+  if (!picker) return;
+  const filterEl   = picker.querySelector('.dep-filter');
+  const showDoneEl = picker.querySelector('.dep-show-done');
+  const chosenEl   = picker.querySelector('.dep-chosen');
+  const boxes      = [...picker.querySelectorAll('input[name="depends_on_ids"]')];
   const startDateEl = form.querySelector('[name="start_date"]');
   const startTimeEl = form.querySelector('[name="start_time"]');
-  if (!depEl || !startDateEl) return;
-  depEl.addEventListener('change', () => {
-    const depId = parseInt(depEl.value);
-    if (!depId) return;
-    const dep = taskById[depId];
-    if (!dep) return;
-    const anchor = dep.end_date || dep.start_date;
-    if (anchor) {
-      const anchorStr = anchor.replace(' ', 'T');
-      const best = anchorStr > nowIsoStr() ? anchorStr : nowIsoStr();
-      startDateEl.value = best.slice(0, 10);
-      if (startTimeEl) startTimeEl.value = best.slice(11, 16);
-      startDateEl.dispatchEvent(new Event('change'));
+
+  const refreshList = () => {
+    const q = filterEl.value.trim().toLowerCase().replace(/^#/, '');
+    const showDone = showDoneEl.checked;
+    for (const cb of boxes) {
+      const opt = cb.closest('.dep-option');
+      const visible = (cb.checked || showDone || opt.dataset.status !== 'done')
+        && (!q || opt.dataset.text.includes(q));
+      opt.style.display = visible ? '' : 'none';
     }
-  });
+    picker.querySelectorAll('.dep-group').forEach(g => {
+      g.style.display = [...g.querySelectorAll('.dep-option')].some(o => o.style.display !== 'none') ? '' : 'none';
+    });
+  };
+
+  const refreshChosen = () => {
+    const chosen = boxes.filter(cb => cb.checked);
+    chosenEl.innerHTML = chosen.length
+      ? chosen.map(cb => {
+          const t = taskById[cb.value];
+          return `<span class="dep-chip" style="display:inline-flex;align-items:center;gap:0.2rem;border:1px solid var(--border);border-radius:3px;padding:0 0.3rem;margin:0 0.25rem 0.25rem 0;font-size:0.8rem">#${cb.value} ${escHtml(t ? t.title : '')}<button type="button" class="btn btn-ghost dep-remove" data-id="${cb.value}" title="Remove" style="padding:0 0.2rem">✕</button></span>`;
+        }).join('')
+      : '<span style="color:var(--text-muted);font-size:0.8rem">None</span>';
+    chosenEl.querySelectorAll('.dep-remove').forEach(btn => btn.addEventListener('click', () => {
+      const cb = boxes.find(b => b.value === btn.dataset.id);
+      if (cb) { cb.checked = false; refreshChosen(); refreshList(); }
+    }));
+  };
+
+  const fillStart = () => {
+    if (!startDateEl) return;
+    const anchors = boxes.filter(cb => cb.checked)
+      .map(cb => taskById[cb.value]).filter(Boolean)
+      .map(t => (t.end_date || t.start_date || '').replace(' ', 'T')).filter(Boolean);
+    if (!anchors.length) return;
+    const latest = anchors.sort().at(-1);
+    const best = latest > nowIsoStr() ? latest : nowIsoStr();
+    startDateEl.value = best.slice(0, 10);
+    if (startTimeEl) startTimeEl.value = best.slice(11, 16);
+    startDateEl.dispatchEvent(new Event('change'));
+  };
+
+  filterEl.addEventListener('input', refreshList);
+  showDoneEl.addEventListener('change', refreshList);
+  boxes.forEach(cb => cb.addEventListener('change', () => {
+    refreshChosen();
+    if (cb.checked) fillStart();
+  }));
+  refreshChosen();
+  refreshList();
 }
 
 async function showProjectsList(el, editingId = null) {
@@ -295,7 +338,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     if (visiting.has(id)) return 0;  // cycle — break recursion
     visiting.add(id);
     const t = taskById[id];
-    depthCache[id] = t ? 1 + depDepth(t.depends_on_id, visiting) : 0;
+    depthCache[id] = t ? 1 + Math.max(0, ...depIds(t).map(d => depDepth(d, new Set(visiting)))) : 0;
     return depthCache[id];
   };
   tasks.sort((a, b) => {
@@ -305,27 +348,36 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
     return depDepth(a.id) - depDepth(b.id) || a.id - b.id;
   });
 
-  // Dependency dropdown grouped by project — excludes selfId to prevent self-reference.
+  // Dependency picker grouped by project — excludes selfId to prevent self-reference.
   // Current project appears first, then other projects alphabetically.
-  const dependsOptions = (selectedId, selfId) => {
+  const dependencyPicker = (selectedIds, selfId) => {
+    const chosen = new Set(selectedIds);
     const grouped = {};
     for (const t of allTasks) {
       if (t.id === selfId) continue;
       (grouped[t.project_id] = grouped[t.project_id] || []).push(t);
     }
-    const makeOptions = ts => ts.map(t =>
-      `<option value="${t.id}"${t.id === selectedId ? ' selected' : ''}>${escHtml(t.title)}</option>`
-    ).join('');
+    const option = t => `<label class="dep-option" data-status="${escHtml(t.status)}" data-text="${escHtml(`${t.id} ${t.title}`.toLowerCase())}" style="display:block;font-size:0.8rem;white-space:nowrap;cursor:pointer">
+        <input type="checkbox" name="depends_on_ids" value="${t.id}"${chosen.has(t.id) ? ' checked' : ''}>
+        <span style="color:var(--text-muted)">#${t.id}</span> ${escHtml(t.title)}${t.status === 'done' ? ' <span style="color:var(--text-muted)">(done)</span>' : ''}
+      </label>`;
+    const group = (label, ts) => `<div class="dep-group"><div style="font-size:0.75rem;font-weight:600;color:var(--text-muted);margin-top:0.25rem">${escHtml(label)}</div>${ts.map(option).join('')}</div>`;
     const groups = [
-      ...(grouped[projectId]
-        ? [`<optgroup label="${escHtml(projById[projectId]?.name || 'This project')} (this project)">${makeOptions(grouped[projectId])}</optgroup>`]
-        : []),
+      ...(grouped[projectId] ? [group(`${projById[projectId]?.name || 'This project'} (this project)`, grouped[projectId])] : []),
       ...allProjects
         .filter(p => p.id !== projectId && grouped[p.id])
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map(p => `<optgroup label="${escHtml(p.name)}">${makeOptions(grouped[p.id])}</optgroup>`),
+        .map(p => group(p.name, grouped[p.id])),
     ].join('');
-    return `<option value=""${!selectedId ? ' selected' : ''}>— none —</option>${groups}`;
+    return `<div class="dep-picker" style="min-width:280px;max-width:420px">
+      <label>Depends on <span style="font-weight:normal;color:var(--text-muted)">(waits for all)</span></label>
+      <div class="dep-chosen" style="margin-bottom:0.25rem"></div>
+      <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.25rem">
+        <input type="search" class="dep-filter" placeholder="Filter: title or #id" style="flex:1;min-width:0">
+        <label style="white-space:nowrap;font-size:0.8rem;font-weight:normal"><input type="checkbox" class="dep-show-done"> show done</label>
+      </div>
+      <div class="dep-list" style="max-height:12rem;overflow:auto;border:1px solid var(--border);border-radius:3px;padding:0.25rem 0.4rem">${groups}</div>
+    </div>`;
   };
 
   const resourceCheckboxes = (selectedIds = []) =>
@@ -353,7 +405,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
             <div><label>Description</label><input name="description" value="${escHtml(t.description || '')}" style="width:240px" placeholder="Optional description"></div>
             <div><label>Command</label><input name="command" value="${escHtml(t.command || '')}" style="width:280px;font-family:monospace" placeholder="shell command (cpu/gpu tasks)"></div>
             <div><label>Resources</label>${resourceCheckboxes(t.resource_ids || [])}</div>
-            <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(t.depends_on_id, t.id)}</select></div>
+            <div>${dependencyPicker(depIds(t), t.id)}</div>
             <div><label>Start</label>
               <span style="display:flex;gap:0.25rem">
                 <input type="date" name="start_date" value="${dtDate(t.start_date)}" style="width:130px">
@@ -396,10 +448,9 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       </td>
       <td>${resNames || '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="font-size:0.8rem">${t.dependency_broken
-        ? `<span style="color:var(--danger)" title="This task's dependency was deleted — set a new one.">⚠ deleted — update</span>`
-        : t.depends_on_id && taskById[t.depends_on_id]
-        ? (() => { const dep = taskById[t.depends_on_id]; const met = dep.status === 'done';
-            return `<span style="color:var(--text-muted)"><span style="color:${met ? 'var(--success,#4caf50)' : 'var(--danger)'}" title="${met ? 'Dependency met' : 'Dependency not yet done'}">${met ? '✓' : '✗'}</span> ${escHtml(dep.title)}</span>`; })()
+        ? `<span style="color:var(--danger)" title="One of this task's dependencies was deleted — review them.">⚠ deleted — update</span>`
+        : depIds(t).length
+        ? `<span style="color:var(--text-muted)">${depLinesHtml(t, taskById)}</span>`
         : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="font-size:0.8rem">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.8rem">${fmtDt(t.end_date)}</td>
@@ -453,7 +504,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       <div><label>Description</label><input name="description" placeholder="Optional description" style="width:240px"></div>
       <div><label>Command</label><input name="command" placeholder="shell command (cpu/gpu tasks)" style="width:280px;font-family:monospace"></div>
       <div><label>Resources</label>${resourceCheckboxes([])}</div>
-      <div><label>Depends on</label><select name="depends_on_id">${dependsOptions(null, null)}</select></div>
+      <div>${dependencyPicker([], null)}</div>
       <div><label>Start</label>
         <span style="display:flex;gap:0.25rem">
           <input type="date" name="start_date" style="width:130px">
@@ -535,21 +586,20 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   const addForm = el.querySelector('#add-task-form');
   setupAutoCalcEnd(addForm);
   setupResourceAutoStart(addForm, resourceById);
-  setupDependencyAutoStart(addForm, taskById);
+  setupDependencyPicker(addForm, taskById);
 
   el.querySelector('#add-task-form').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const durRaw = fd.get('duration');
     try {
-      const depRaw = fd.get('depends_on_id');
       await api.post('/tasks/', {
         title: fd.get('title'),
         description: fd.get('description') || null,
         command: fd.get('command') || null,
         project_id: projectId,
         resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
-        depends_on_id: depRaw ? parseInt(depRaw) : null,
+        depends_on_ids: fd.getAll('depends_on_ids').map(v => parseInt(v)),
         start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,
         end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
         duration: durRaw ? parseFloat(durRaw) : null,
@@ -566,7 +616,7 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   const editTaskForm = el.querySelector('.edit-task-form');
   if (editTaskForm) {
     setupAutoCalcEnd(editTaskForm);
-    setupDependencyAutoStart(editTaskForm, taskById);
+    setupDependencyPicker(editTaskForm, taskById);
     const editRow = editTaskForm.closest('tr');
     const editingTask = tasks.find(t => t.id === editingTaskId);
     if (editingTask?.status === 'in_progress' && editingTask?.command) {
@@ -586,14 +636,13 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       const fd = new FormData(e.target);
       const durRaw = fd.get('duration');
       try {
-        const depRaw2 = fd.get('depends_on_id');
         const newProjectId = parseInt(fd.get('project_id'));
         await api.patch(`/tasks/${editRow.dataset.id}`, {
           title: fd.get('title'),
           description: fd.get('description') || null,
           command: fd.get('command') || null,
           resource_ids: fd.getAll('resource_ids').map(v => parseInt(v)),
-          depends_on_id: depRaw2 ? parseInt(depRaw2) : null,
+          depends_on_ids: fd.getAll('depends_on_ids').map(v => parseInt(v)),
           start_date: fd.get('start_date') ? `${fd.get('start_date')}T${fd.get('start_time') || '00:00'}` : null,
           end_date: fd.get('end_date') ? `${fd.get('end_date')}T${fd.get('end_time') || '00:00'}` : null,
           duration: durRaw ? parseFloat(durRaw) : null,

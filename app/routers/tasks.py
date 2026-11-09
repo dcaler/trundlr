@@ -6,6 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.database import get_db
+from app.dependencies import (
+    dependency_fields, dependency_ids, dependency_map, set_dependencies, unlink_deleted_task,
+    would_cycle,
+)
 from app.email import send_notification
 from app.models import AppSettings, Project, Resource, ResourcePool, Task, TaskResource, TaskStatus
 from app.reflow import project_names, run_reflow
@@ -84,14 +88,22 @@ def _set_resources(task_id: int, resource_ids: list[int], session: Session) -> N
 
 
 def _task_read(task: Task, session: Session) -> TaskRead:
-    return TaskRead(**task.model_dump(), resource_ids=_resource_ids(task.id, session))
+    return TaskRead(**task.model_dump(), resource_ids=_resource_ids(task.id, session),
+                    **dependency_fields(dependency_ids(session, task.id)))
+
+
+def _check_dependencies(dep_ids: list[int], session: Session) -> None:
+    for dep in dep_ids:
+        if not session.get(Task, dep):
+            raise HTTPException(status_code=404, detail=f"Dependency task {dep} not found")
 
 
 # Statuses the board treats as completed (hidden unless "Show completed").
 COMPLETED_STATUSES = (TaskStatus.done, TaskStatus.failed)
 
 # Columns the list returns; log_tail is left out and never loaded.
-_SUMMARY_FIELDS = [f for f in TaskSummary.model_fields if f != "resource_ids"]
+_SUMMARY_FIELDS = [f for f in TaskSummary.model_fields
+                   if f not in ("resource_ids", "depends_on_ids", "depends_on_id")]
 
 
 @router.get("/", response_model=List[TaskSummary])
@@ -118,10 +130,11 @@ def list_tasks(
     if open_only:
         stmt = stmt.where(Task.status.notin_(COMPLETED_STATUSES))
     tasks = list(session.exec(stmt).all())
+    deps = dependency_map(session)  # one small table; read it whole
 
     if open_only:
         have = {t.id for t in tasks}
-        dep_ids = {t.depends_on_id for t in tasks if t.depends_on_id} - have
+        dep_ids = {d for t in tasks for d in deps.get(t.id, [])} - have
         if dep_ids:
             tasks += session.exec(base.where(Task.id.in_(dep_ids))).all()
             tasks.sort(key=lambda t: (t.start_date is None, t.start_date or datetime.min))
@@ -138,7 +151,8 @@ def list_tasks(
 
     return [
         TaskSummary(**{f: getattr(t, f) for f in _SUMMARY_FIELDS},
-                    resource_ids=rid_map.get(t.id, []))
+                    resource_ids=rid_map.get(t.id, []),
+                    **dependency_fields(deps.get(t.id, [])))
         for t in tasks
     ]
 
@@ -150,13 +164,14 @@ def create_task(data: TaskCreate, session: Session = Depends(get_db), skip_reflo
     for rid in data.resource_ids:
         if not session.get(Resource, rid):
             raise HTTPException(status_code=404, detail=f"Resource {rid} not found")
-    if data.depends_on_id is not None and not session.get(Task, data.depends_on_id):
-        raise HTTPException(status_code=404, detail="Dependency task not found")
+    dep_ids = data.all_dependency_ids()
+    _check_dependencies(dep_ids, session)
 
-    task = Task(**data.model_dump(exclude={"resource_ids"}))
+    task = Task(**data.model_dump(exclude={"resource_ids", "depends_on_ids", "depends_on_id"}))
     session.add(task)
     session.flush()
     _set_resources(task.id, data.resource_ids, session)
+    set_dependencies(session, task.id, dep_ids)
     session.commit()
     if not skip_reflow and data.start_date is None and data.end_date is None:
         _reflow(session)
@@ -186,22 +201,21 @@ def update_task(
         # Retrying a task a pool lane took: back onto the pool, for any member.
         _return_to_pool(session, task)
 
-    if "depends_on_id" in updates:
-        new_dep = updates["depends_on_id"]
-        if new_dep is not None:
-            if not session.get(Task, new_dep):
-                raise HTTPException(status_code=404, detail="Dependency task not found")
-            # Walk the chain from new_dep upward; if we reach task_id it's a cycle.
-            cur = new_dep
-            visited = set()
-            while cur is not None:
-                if cur == task_id:
-                    raise HTTPException(status_code=422, detail="Setting this dependency would create a cycle")
-                if cur in visited:
-                    break
-                visited.add(cur)
-                parent = session.get(Task, cur)
-                cur = parent.depends_on_id if parent else None
+    if "depends_on_ids" in updates and "depends_on_id" in updates:
+        raise HTTPException(status_code=422,
+                            detail="Send depends_on_ids or the deprecated depends_on_id, not both")
+    new_deps = None
+    if "depends_on_ids" in updates:
+        new_deps = sorted(set(updates.pop("depends_on_ids") or []))
+    elif "depends_on_id" in updates:
+        single = updates.pop("depends_on_id")
+        new_deps = [single] if single is not None else []
+    if new_deps is not None:
+        _check_dependencies(new_deps, session)
+        if task_id in new_deps or would_cycle(session, task_id, new_deps):
+            raise HTTPException(status_code=422, detail="Setting this dependency would create a cycle")
+        set_dependencies(session, task_id, new_deps)
+        if new_deps:
             task.dependency_broken = False
 
     if "project_id" in updates:
@@ -251,14 +265,7 @@ def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
     # Any task that depends on this one would dangle (and the FK delete would 500),
     # so clear the link, force it to blocked, and flag it — signalling the user to
     # choose a new dependency rather than silently guessing the predecessor.
-    dependents = session.exec(
-        select(Task).where(Task.depends_on_id == task_id)
-    ).all()
-    for dep in dependents:
-        dep.depends_on_id = None
-        dep.status = TaskStatus.blocked
-        dep.dependency_broken = True
-        session.add(dep)
+    dependents = unlink_deleted_task(session, task_id)
 
     # Resolve names before the delete, while the rows are still loadable.
     blocked_projects = project_names(session, [d.project_id for d in dependents])

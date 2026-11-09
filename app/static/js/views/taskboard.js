@@ -32,7 +32,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
     : tasks;
   const visible = scoped
     .filter(t => showCompleted || !COMPLETED.has(t.status))
-    .filter(t => !hideDepUnmet || !(t.depends_on_id && taskById[t.depends_on_id]?.status !== 'done'));
+    .filter(t => !hideDepUnmet || !hasUnmetDeps(t, taskById));
   // error floats to the very top, then in_progress/paused; blocked sink to bottom;
   // rest sort by schedule.
   visible.sort((a, b) => {
@@ -49,11 +49,11 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
       `<option value="${s}"${t.status === s ? ' selected' : ''}>${escHtml(s.replace('_', ' '))}</option>`
     ).join('');
 
-    const dep = t.depends_on_id ? taskById[t.depends_on_id] : null;
+    const depLines = depLinesHtml(t, taskById);
     const depHtml = t.dependency_broken
-      ? `<div style="font-size:0.78em;color:var(--danger);margin-top:1px" title="This task's dependency was deleted — set a new one.">⚠ dependency deleted — update it</div>`
-      : dep
-      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px"><span style="color:${dep.status === 'done' ? 'var(--success,#4caf50)' : 'var(--danger)'}" title="${dep.status === 'done' ? 'Dependency met' : 'Dependency not yet done'}">${dep.status === 'done' ? '✓' : '✗'}</span> ${escHtml(dep.title)}</div>`
+      ? `<div style="font-size:0.78em;color:var(--danger);margin-top:1px" title="One of this task's dependencies was deleted — review them.">⚠ dependency deleted — update it</div>`
+      : depLines
+      ? `<div style="font-size:0.78em;color:var(--text-muted);margin-top:1px">${depLines}</div>`
       : '';
 
     const descSnippet = t.description
