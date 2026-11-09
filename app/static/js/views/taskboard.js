@@ -14,7 +14,9 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
   el.innerHTML = '<p class="loading">Loading…</p>';
 
   const [tasks, projects, resources] = await Promise.all([
-    api.get('/tasks/'),
+    // Completed tasks are only fetched when shown; open_only still returns
+    // the tasks open ones depend on, for the dependency column.
+    api.get(showCompleted ? '/tasks/' : '/tasks/?open_only=true'),
     api.get('/projects/'),
     api.get('/resources/'),
   ]);

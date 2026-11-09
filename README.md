@@ -145,7 +145,7 @@ Availability defaults to `available_from`–`available_to` (`"09:00"`–`"17:00"
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/tasks/` | List all tasks; optional `?project_id=` filter |
+| `GET` | `/api/tasks/` | List tasks, without `log_tail` (get it from `/api/tasks/{id}`); optional `?project_id=`, `?resource_id=`, and `?open_only=true` (leaves out done/failed tasks except those an open task depends on) |
 | `POST` | `/api/tasks/` | Create a task (`title`, `project_id` required) |
 | `GET` | `/api/tasks/{id}` | Get a task by id |
 | `PATCH` | `/api/tasks/{id}` | Partial update — assign/unassign resource, set dates, change status |

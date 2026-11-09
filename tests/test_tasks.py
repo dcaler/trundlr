@@ -259,3 +259,38 @@ def test_create_missing_title(client, project_id):
     assert client.post("/api/tasks/", json={"project_id": project_id}).status_code == 422
 
 
+
+
+# ── List payload: no log_tail; open_only ───────────────────────────────────
+
+def _task(client, project_id, title, **patch):
+    t = client.post("/api/tasks/", json={"title": title, "project_id": project_id}).json()
+    if patch:
+        t = client.patch(f"/api/tasks/{t['id']}", json=patch).json()
+    return t
+
+
+def test_list_leaves_out_log_tail_but_single_task_has_it(client, project_id):
+    t = _task(client, project_id, "Logged", log_tail="line 1\nline 2")
+    listed = next(x for x in client.get("/api/tasks/").json() if x["id"] == t["id"])
+    assert "log_tail" not in listed
+    assert client.get(f"/api/tasks/{t['id']}").json()["log_tail"] == "line 1\nline 2"
+
+
+def test_open_only_leaves_out_done_and_failed(client, project_id):
+    _task(client, project_id, "Open")
+    _task(client, project_id, "Errored", status="error")
+    _task(client, project_id, "Done", status="done")
+    _task(client, project_id, "Failed", status="failed")
+    titles = {x["title"] for x in client.get("/api/tasks/?open_only=true").json()}
+    assert titles == {"Open", "Errored"}
+    all_titles = {x["title"] for x in client.get("/api/tasks/").json()}
+    assert {"Open", "Errored", "Done", "Failed"} <= all_titles
+
+
+def test_open_only_keeps_completed_tasks_that_open_tasks_depend_on(client, project_id):
+    dep = _task(client, project_id, "Finished dep", status="done")
+    _task(client, project_id, "Unrelated done", status="done")
+    _task(client, project_id, "Waiter", depends_on_id=dep["id"])
+    titles = {x["title"] for x in client.get("/api/tasks/?open_only=true").json()}
+    assert titles == {"Finished dep", "Waiter"}

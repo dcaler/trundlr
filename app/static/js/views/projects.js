@@ -276,6 +276,11 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
   ]);
   // tasks = only this project's tasks (for the task list); allTasks used for dependency lookup
   const tasks = allTasks.filter(t => t.project_id === projectId);
+  // The task list leaves out log_tail; fetch it for the task being edited.
+  const editing = editingTaskId !== null ? tasks.find(t => t.id === editingTaskId) : null;
+  if (editing) {
+    try { editing.log_tail = (await api.get(`/tasks/${editingTaskId}`)).log_tail; } catch {}
+  }
 
   const resourceById = Object.fromEntries(resources.map(r => [r.id, r]));
   const taskById     = Object.fromEntries(allTasks.map(t => [t.id, t]));

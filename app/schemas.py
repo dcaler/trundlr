@@ -179,7 +179,9 @@ class TaskUpdate(BaseModel):
         return self
 
 
-class TaskRead(BaseModel):
+class TaskSummary(BaseModel):
+    """A task as the list endpoint returns it: everything except log_tail,
+    which can be large and is fetched per task (GET /api/tasks/{id})."""
     id: int
     title: str
     description: Optional[str] = None
@@ -189,7 +191,6 @@ class TaskRead(BaseModel):
     end_date: Optional[datetime] = None
     duration: Optional[float] = None
     exit_code: Optional[int] = None
-    log_tail: Optional[str] = None
     project_id: int
     resource_ids: list[int] = []
     depends_on_id: Optional[int] = None
@@ -198,6 +199,10 @@ class TaskRead(BaseModel):
     pool_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
+
+
+class TaskRead(TaskSummary):
+    log_tail: Optional[str] = None
 
 
 class RunnerClaimRead(TaskRead):

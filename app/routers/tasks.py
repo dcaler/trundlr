@@ -9,7 +9,7 @@ from app.database import get_db
 from app.email import send_notification
 from app.models import AppSettings, Project, Resource, ResourcePool, Task, TaskResource, TaskStatus
 from app.reflow import project_names, run_reflow
-from app.schemas import TaskCreate, TaskRead, TaskUpdate
+from app.schemas import TaskCreate, TaskRead, TaskSummary, TaskUpdate
 from app.validation import DBId, OptionalDBIdQuery
 
 
@@ -87,21 +87,44 @@ def _task_read(task: Task, session: Session) -> TaskRead:
     return TaskRead(**task.model_dump(), resource_ids=_resource_ids(task.id, session))
 
 
-@router.get("/", response_model=List[TaskRead])
+# Statuses the board treats as completed (hidden unless "Show completed").
+COMPLETED_STATUSES = (TaskStatus.done, TaskStatus.failed)
+
+# Columns the list returns; log_tail is left out and never loaded.
+_SUMMARY_FIELDS = [f for f in TaskSummary.model_fields if f != "resource_ids"]
+
+
+@router.get("/", response_model=List[TaskSummary])
 def list_tasks(
     project_id: int | None = OptionalDBIdQuery(),
     resource_id: int | None = OptionalDBIdQuery(),
+    open_only: bool = Query(False),
     session: Session = Depends(get_db),
 ):
+    """List tasks without log_tail. open_only=true leaves out done and failed
+    tasks, except those an open task depends on (so dependencies still show)."""
     from sqlalchemy import nullslast
-    stmt = select(Task).order_by(nullslast(Task.start_date))
+    from sqlalchemy.orm import load_only
+
+    cols = [getattr(Task, f) for f in _SUMMARY_FIELDS]
+    base = select(Task).options(load_only(*cols))
+    stmt = base.order_by(nullslast(Task.start_date))
     if project_id is not None:
         stmt = stmt.where(Task.project_id == project_id)
     if resource_id is not None:
         stmt = stmt.join(TaskResource, Task.id == TaskResource.task_id).where(
             TaskResource.resource_id == resource_id
         )
-    tasks = session.exec(stmt).all()
+    if open_only:
+        stmt = stmt.where(Task.status.notin_(COMPLETED_STATUSES))
+    tasks = list(session.exec(stmt).all())
+
+    if open_only:
+        have = {t.id for t in tasks}
+        dep_ids = {t.depends_on_id for t in tasks if t.depends_on_id} - have
+        if dep_ids:
+            tasks += session.exec(base.where(Task.id.in_(dep_ids))).all()
+            tasks.sort(key=lambda t: (t.start_date is None, t.start_date or datetime.min))
 
     # Bulk-fetch all task-resource rows to avoid N+1 queries
     task_ids = [t.id for t in tasks]
@@ -113,7 +136,11 @@ def list_tasks(
     for tr in tr_rows:
         rid_map.setdefault(tr.task_id, []).append(tr.resource_id)
 
-    return [TaskRead(**t.model_dump(), resource_ids=rid_map.get(t.id, [])) for t in tasks]
+    return [
+        TaskSummary(**{f: getattr(t, f) for f in _SUMMARY_FIELDS},
+                    resource_ids=rid_map.get(t.id, []))
+        for t in tasks
+    ]
 
 
 @router.post("/", response_model=TaskRead, status_code=201)
