@@ -3,14 +3,14 @@
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_VALUES = [1, 2, 4, 8, 16, 32, 64];
 
-function availabilityLabel(r) {
-  const from = r.available_from || '?';
-  const to   = r.available_to   || '?';
-  const days = DAY_VALUES
-    .map((v, i) => (r.available_days & v) ? DAY_LABELS[i] : null)
-    .filter(Boolean)
-    .join(' ');
-  return `${days} ${from}–${to}`;
+// Why the default availability fields are not used, or null when they are.
+// Weekly windows replace them (app/scheduling.py); a pool has no capacity of its own.
+function defaultAvailabilityNote(r, windowCount) {
+  if ((r.member_ids || []).length) return 'Not in use: a pool has no availability of its own';
+  if (windowCount > 0) {
+    return `Not in use: replaced by weekly windows (${windowCount})`;
+  }
+  return null;
 }
 
 function dayCheckboxes(selected = 31) {
@@ -140,7 +140,7 @@ function renderWindowsSection(windows, resourceId) {
 
   const notice = windows.length === 0
     ? `<p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 0.5rem">
-        None — default availability (shown above) is used for scheduling.
+        None — the default availability above is used for scheduling.
        </p>`
     : `<p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 0.5rem">
         These windows replace the default availability for scheduling purposes.
@@ -232,14 +232,63 @@ function renderBlockoutsSection(blockouts) {
     </div>`;
 }
 
+function renderCalBlocksSection(calblocks) {
+  const sorted = [...calblocks].sort((a, b) =>
+    a.start_date.localeCompare(b.start_date) || (a.from_time || '').localeCompare(b.from_time || ''));
+  const rows = sorted.map(c => {
+    const dates = c.start_date === c.end_date
+      ? fmtDate(c.start_date)
+      : `${fmtDate(c.start_date)} – ${fmtDate(c.end_date)}`;
+    const times = c.from_time ? `${c.from_time}–${c.to_time || '?'}` : 'all day';
+    return `<tr><td>${escHtml(dates)}</td>
+      <td style="font-size:0.85rem;color:var(--text-muted)">${escHtml(times)}</td></tr>`;
+  }).join('');
+  return `
+    <div style="margin-top:1.5rem">
+      <h3 style="margin:0 0 0.25rem;font-size:1rem">Calendar blocks</h3>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 0.5rem">
+        Busy times from this resource's calendar. Read-only here: edit them in the calendar.
+      </p>
+      ${calblocks.length > 0
+        ? `<table><thead><tr><th>Dates</th><th>Times</th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<p style="color:var(--text-muted);font-size:0.85rem;margin:0">None.</p>'}
+    </div>`;
+}
+
+function renderDetailsForm(resource, resources, windowCount) {
+  const r = resource;
+  const spanned = resources.some(o => (o.spans_ids || []).includes(r.id));
+  const member  = resources.some(o => (o.member_ids || []).includes(r.id));
+  const note = defaultAvailabilityNote(r, windowCount);
+  return `
+    <form id="edit-resource-form" class="form-row" style="flex-wrap:wrap;gap:0.5rem;align-items:flex-start;margin-bottom:1.5rem">
+      <div><label>Name</label><input name="name" value="${escHtml(r.name)}" required style="width:180px"></div>
+      ${kindField(r.kind)}
+      ${spanned || (r.member_ids || []).length ? '' : spansField(resources, r.id, r.spans_ids || [])}
+      ${spanned || member || (r.spans_ids || []).length ? '' : membersField(resources, r.id, r.member_ids || [])}
+      ${runnerEnvField(r)}
+      <div class="avail-fields${note ? ' not-in-use' : ''}"${note ? ' style="opacity:0.55"' : ''}>
+        <label>Default availability</label>
+        ${note ? `<p class="avail-note" style="color:var(--text-muted);font-size:0.85rem;margin:0 0 0.25rem">${escHtml(note)}</p>` : ''}
+        ${availabilityFields(r)}
+      </div>
+      <div style="align-self:flex-end">
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>`;
+}
+
 async function showResourceDetail(el, resourceId) {
   el.innerHTML = '<p class="loading">Loading…</p>';
-  const [resource, tasks, windows, blockouts] = await Promise.all([
+  const [resource, resources, tasks, windows, blockouts, calblocks] = await Promise.all([
     api.get(`/resources/${resourceId}`),
+    api.get('/resources/'),
     api.get(`/tasks/?resource_id=${resourceId}`),
     api.get(`/resources/${resourceId}/windows`),
     api.get(`/resources/${resourceId}/blockouts`),
+    api.get(`/resources/${resourceId}/calblocks`),
   ]);
+  const byId = Object.fromEntries(resources.map(r => [r.id, r]));
 
   const kindLabel     = { human: 'Human', ai: 'AI', cpu: 'CPU', gpu: 'GPU' };
   const DONE_STATUSES = new Set(['done', 'error', 'failed']);
@@ -253,28 +302,39 @@ async function showResourceDetail(el, resourceId) {
         </a>
       </p>`;
 
-  const scheduleLabel = windows.length > 0
-    ? `Custom schedule (${windows.length} window${windows.length !== 1 ? 's' : ''})`
-    : availabilityLabel(resource);
-
   el.innerHTML = `
     <div style="margin-bottom:1rem">
       <button class="btn btn-ghost back-btn">← Resources</button>
     </div>
     <h1>${escHtml(resource.name)}</h1>
-    <p style="color:var(--text-muted);margin-bottom:1.5rem">${escHtml(kindLabel[resource.kind] || resource.kind)} · ${escHtml(scheduleLabel)}</p>
+    <p style="color:var(--text-muted);margin-bottom:1.5rem">${escHtml((kindLabel[resource.kind] || resource.kind) + spansLabel(resource, byId))}</p>
 
-    <h2 style="margin:0 0 0.5rem">Tasks</h2>
-    ${taskLink}
+    <h2 style="margin:0 0 0.5rem">Details</h2>
+    ${renderDetailsForm(resource, resources, windows.length)}
 
-    <div style="margin-top:2.5rem;border-top:1px solid var(--border);padding-top:1.5rem">
+    <div style="margin-top:2rem;border-top:1px solid var(--border);padding-top:1.5rem">
       <h2 style="margin:0 0 1rem">Schedule</h2>
       ${renderWindowsSection(windows, resourceId)}
       ${renderBlockoutsSection(blockouts)}
+      ${renderCalBlocksSection(calblocks)}
+    </div>
+
+    <div style="margin-top:2rem;border-top:1px solid var(--border);padding-top:1.5rem">
+      <h2 style="margin:0 0 0.5rem">Tasks</h2>
+      ${taskLink}
     </div>
   `;
 
   el.querySelector('.back-btn').addEventListener('click', () => showResourcesList(el));
+
+  el.querySelector('#edit-resource-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const payload = buildPayload(new FormData(e.target), e.target);
+    try {
+      await api.patch(`/resources/${resourceId}`, payload);
+      await showResourceDetail(el, resourceId);
+    } catch (err) { alert(`Error: ${err.message}`); }
+  });
 
   el.querySelectorAll('.delete-window-btn').forEach(btn =>
     btn.addEventListener('click', async () => {
@@ -325,7 +385,7 @@ async function showResourceDetail(el, resourceId) {
   });
 }
 
-async function showResourcesList(el, editingId = null) {
+async function showResourcesList(el) {
   el.innerHTML = '<p class="loading">Loading…</p>';
   const resources = await api.get('/resources/');
 
@@ -333,31 +393,9 @@ async function showResourcesList(el, editingId = null) {
   const byId = Object.fromEntries(resources.map(r => [r.id, r]));
 
   const rows = resources.map(r => {
-    if (r.id === editingId) {
-      return `<tr class="edit-row" data-id="${r.id}">
-        <td colspan="4">
-          <form class="form-row edit-resource-form" style="flex-wrap:wrap;gap:0.5rem;padding:0.25rem 0">
-            <div><label>Name</label><input name="name" value="${escHtml(r.name)}" required style="width:160px"></div>
-            ${kindField(r.kind)}
-            <div class="avail-fields">
-              ${availabilityFields(r)}
-            </div>
-            ${resources.some(o => (o.spans_ids || []).includes(r.id)) || (r.member_ids || []).length ? '' : spansField(resources, r.id, r.spans_ids || [])}
-            ${resources.some(o => (o.spans_ids || []).includes(r.id) || (o.member_ids || []).includes(r.id)) || (r.spans_ids || []).length ? '' : membersField(resources, r.id, r.member_ids || [])}
-            ${runnerEnvField(r)}
-            <div style="align-self:flex-end;display:flex;gap:0.25rem">
-              <button type="submit" class="btn btn-primary">Save</button>
-              <button type="button" class="btn btn-ghost cancel-resource-edit">Cancel</button>
-            </div>
-          </form>
-        </td>
-      </tr>`;
-    }
-
     return `<tr>
       <td><button class="btn btn-ghost view-resource-btn" data-id="${r.id}" style="font-weight:600;padding:0;text-align:left">${escHtml(r.name)}</button></td>
       <td>${escHtml((kindLabel[r.kind] || r.kind) + spansLabel(r, byId))}</td>
-      <td>${escHtml(availabilityLabel(r))}</td>
       <td style="text-align:right;white-space:nowrap">
         <a href="/api/resources/${r.id}/calendar.ics" title="Subscribe (iCal)"
            style="margin-right:0.4rem;text-decoration:none;font-size:1rem">&#128197;</a>
@@ -391,7 +429,7 @@ async function showResourcesList(el, editingId = null) {
       ? '<p style="color:var(--text-muted)">No resources yet — add one above.</p>'
       : `<table>
           <thead><tr>
-            <th>Name</th><th>Kind</th><th>Availability</th><th style="width:120px"></th>
+            <th>Name</th><th>Kind</th><th style="width:120px"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`}
@@ -413,26 +451,8 @@ async function showResourcesList(el, editingId = null) {
   );
 
   el.querySelectorAll('.edit-resource-btn').forEach(btn =>
-    btn.addEventListener('click', () => showResourcesList(el, parseInt(btn.dataset.id)))
+    btn.addEventListener('click', () => showResourceDetail(el, parseInt(btn.dataset.id)))
   );
-
-  const editForm = el.querySelector('.edit-resource-form');
-  if (editForm) {
-    const editRow = editForm.closest('tr');
-
-    editForm.addEventListener('submit', async e => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const payload = buildPayload(fd, e.target);
-      try {
-        await api.patch(`/resources/${editRow.dataset.id}`, payload);
-        await showResourcesList(el);
-      } catch (err) { alert(`Error: ${err.message}`); }
-    });
-    el.querySelector('.cancel-resource-edit').addEventListener('click',
-      () => showResourcesList(el)
-    );
-  }
 
   el.querySelectorAll('.delete-resource-btn').forEach(btn =>
     btn.addEventListener('click', async () => {

@@ -106,7 +106,7 @@ To restore, stop the app, copy a snapshot over `/app/data/trundlr.db` in the vol
 | URL | Description |
 |-----|-------------|
 | `/#/projects` | Create/edit projects; add tasks, assign resources and dates inline |
-| `/#/resources` | Create/edit resources (human, AI, CPU, GPU), availability windows and blockouts |
+| `/#/resources` | Add resources (human, AI, CPU, GPU). The name or ✎ opens the resource's page, where all editing happens: details, default availability (marked not in use when weekly windows replace it, or for a pool), weekly windows, blockouts, and its calendar blocks (read-only) |
 | `/#/schedule` → Timeline | Gantt-style timeline — tasks as bars across a configurable date range |
 | `/#/schedule` → Utilization | Per-resource capacity heatmap; over-allocated days flagged with contributing tasks |
 
