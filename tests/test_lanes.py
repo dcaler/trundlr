@@ -628,3 +628,78 @@ def test_error_and_failed_lanes_settle_like_done(client, lanes, project_id):
                                           "end_date": (_utcnow() - timedelta(minutes=1)).isoformat()})
     _task(client, project_id, dual)
     assert _claim(client, dual).headers["X-Runner-Idle"].startswith("settling:")
+
+
+# ── Settle sees a finish earlier in the same minute (incident 2026-11-10) ────
+
+def test_settle_sees_a_finish_earlier_in_the_same_minute(client, lanes, project_id, monkeypatch):
+    """1570 (both cards) ended 12:07:28; pool lanes claimed at 12:07:40. A
+    minute-truncated now (12:07:00) read that end as a future plan and skipped
+    the settle, so both started on cards still full of llama3.3."""
+    import app.routers.runner as runner_router
+    fixed = datetime(2026, 11, 10, 12, 7, 40)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.replace(tzinfo=tz) if tz else fixed
+
+    gpu0, _, dual = lanes
+    d = _task(client, project_id, dual)
+    assert client.patch(f"/api/tasks/{d}", json={
+        "status": "done", "start_date": "2026-11-10T09:55:00",
+        "end_date": "2026-11-10T12:07:28"}).status_code == 200
+    _task(client, project_id, gpu0)
+    monkeypatch.setattr(runner_router, "datetime", Clock)
+    resp = _claim(client, gpu0)
+    assert resp.status_code == 204
+    assert resp.headers["X-Runner-Idle"] == f"settling:{dual}:until-12:12"
+
+
+# ── Unload before start: which Ollama instances a claim lists ────────────────
+
+def _ollama(client, rid, url):
+    env = f"OLLAMA_URL={url}\nCUDA_VISIBLE_DEVICES=x"
+    assert client.patch(f"/api/resources/{rid}", json={"runner_env": env}).status_code == 200
+
+
+@pytest.fixture(name="ollama_lanes")
+def ollama_lanes_fixture(client, lanes):
+    gpu0, gpu1, dual = lanes
+    _ollama(client, gpu0, "http://localhost:11434")
+    _ollama(client, gpu1, "http://localhost:11435")
+    _ollama(client, dual, "http://localhost:11436")
+    _settle(client, 0)
+    return lanes
+
+
+def test_single_lane_unloads_its_own_and_the_dual_instance(client, ollama_lanes, project_id):
+    gpu0, gpu1, _ = ollama_lanes
+    _task(client, project_id, gpu0)
+    _task(client, project_id, gpu1)
+    assert _claim(client, gpu0).json()["unload_urls"] == [
+        "http://localhost:11434", "http://localhost:11436"]
+    assert _claim(client, gpu1).json()["unload_urls"] == [
+        "http://localhost:11435", "http://localhost:11436"]
+
+
+def test_dual_lane_unloads_all_three(client, ollama_lanes, project_id):
+    _, _, dual = ollama_lanes
+    _task(client, project_id, dual)
+    assert _claim(client, dual).json()["unload_urls"] == [
+        "http://localhost:11436", "http://localhost:11434", "http://localhost:11435"]
+
+
+def test_pool_task_unloads_the_lane_it_lands_on(client, ollama_lanes, project_id):
+    gpu0, gpu1, _ = ollama_lanes
+    pool = client.post("/api/resources/", json={
+        "name": "GPU pool", "kind": "gpu", **_ALWAYS, "member_ids": [gpu0, gpu1]}).json()["id"]
+    _task(client, project_id, pool)
+    assert _claim(client, gpu1).json()["unload_urls"] == [
+        "http://localhost:11435", "http://localhost:11436"]
+
+
+def test_lane_without_ollama_url_unloads_nothing(client, lanes, project_id):
+    gpu0, _, _ = lanes
+    _task(client, project_id, gpu0)
+    assert _claim(client, gpu0).json()["unload_urls"] == []

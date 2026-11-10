@@ -221,6 +221,10 @@ class TaskRead(TaskSummary):
 class RunnerClaimRead(TaskRead):
     """TaskRead extended with project context for the runner daemon."""
     project_directory: Optional[str] = None
+    # Ollama instances the runner empties before starting the task: this
+    # lane's and those of lanes sharing its cards (from OLLAMA_URL in each
+    # resource's runner_env).
+    unload_urls: list[str] = []
 
 
 class DayUtilizationRead(BaseModel):

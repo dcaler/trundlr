@@ -17,6 +17,11 @@ Environment variables:
     RUNNER_POLL_INTERVAL  (default: 10) Seconds to wait between polls when queue is empty
     RUNNER_LOG_TAIL_LINES (default: 100) Lines of task output to store in the task record
     RUNNER_LOG_DIR        (default: <trundlr dir>/logs) Directory for per-task .log files
+    RUNNER_UNLOAD_TIMEOUT (default: 60) Seconds to wait for Ollama to unload before a task
+
+Before each task the runner empties the Ollama instances the claim lists in
+unload_urls (this lane's and those sharing its cards), so a model left loaded
+by an earlier task can't push this task's model onto the CPU.
 
 Safety: a task command is only ever executed when the project's working
 directory is explicitly set, absolute, and already exists on disk. The runner
@@ -44,6 +49,64 @@ _shutdown = False
 def _log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"{ts} [runner] {msg}", flush=True)
+
+
+def _ollama_loaded(url: str, timeout: float = 10) -> list[str]:
+    """Names of the models an Ollama instance has loaded (GET /api/ps)."""
+    with urllib.request.urlopen(f"{url.rstrip('/')}/api/ps", timeout=timeout) as resp:
+        models = json.loads(resp.read() or b"{}").get("models") or []
+    return [m.get("model") or m.get("name") for m in models if m.get("model") or m.get("name")]
+
+
+def _ollama_unload(url: str, model: str, timeout: float = 30) -> None:
+    """Ask Ollama to unload a model now (keep_alive 0)."""
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/api/generate",
+        data=json.dumps({"model": model, "keep_alive": 0}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        resp.read()
+
+
+def unload_ollama(urls: list[str], timeout: float = 60, poll: float = 1.0,
+                  note=lambda msg: None) -> "str | None":
+    """Empty every Ollama instance in urls; None when all report nothing loaded,
+    else why not. An instance that doesn't answer is skipped (noted): it isn't
+    running, so it holds no card memory."""
+    live: list[str] = []
+    for url in urls:
+        try:
+            loaded = _ollama_loaded(url)
+        except Exception as e:
+            note(f"{url}: not answering ({e}), skipped")
+            continue
+        live.append(url)
+        for model in loaded:
+            try:
+                _ollama_unload(url, model)
+                note(f"{url}: unloading {model}")
+            except Exception as e:
+                note(f"{url}: unload of {model} failed ({e})")
+    deadline = time.monotonic() + timeout
+    while True:
+        still = {}
+        for url in live:
+            try:
+                if names := _ollama_loaded(url):
+                    still[url] = names
+            except Exception:
+                pass  # stopped answering: no longer holding the card
+        if not still:
+            if live:
+                note("cards clear: " + ", ".join(live))
+            return None
+        if time.monotonic() >= deadline:
+            return "card still holds " + "; ".join(
+                f"{', '.join(names)} on {url}" for url, names in still.items()
+            ) + f" after {timeout:g}s"
+        time.sleep(poll)
 
 
 def _on_signal(sig, frame):
@@ -165,6 +228,11 @@ def main() -> None:
         ),
         help="Directory for per-task .log files (env: RUNNER_LOG_DIR)",
     )
+    parser.add_argument(
+        "--unload-timeout", type=float,
+        default=float(os.environ.get("RUNNER_UNLOAD_TIMEOUT", 60)),
+        help="Seconds to wait for Ollama to unload before a task (env: RUNNER_UNLOAD_TIMEOUT)",
+    )
     args = parser.parse_args()
 
     if not args.resource_id:
@@ -176,6 +244,7 @@ def main() -> None:
     poll_interval = args.poll_interval
     log_tail_lines = args.log_tail_lines
     log_dir = Path(args.log_dir).expanduser()
+    unload_timeout = args.unload_timeout
 
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
@@ -280,14 +349,39 @@ def main() -> None:
                 _log(f"Warning: PATCH failed: {e}")
             continue
 
+        # ── Empty the cards ────────────────────────────────────────────────
+        # A model outlives the task that loaded it, so the card this task
+        # lands on may still be full from another lane. Unload first; if the
+        # card won't clear, fail the task rather than let it run on the CPU.
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "w") as lf:
+            urls = task.get("unload_urls") or []
+            if urls:
+                def note(msg, lf=lf):
+                    _log(f"Task {task_id} unload: {msg}")
+                    lf.write(f"[runner] {msg}\n")
+                    lf.flush()
+                problem = unload_ollama(urls, timeout=unload_timeout, note=note)
+                if problem:
+                    note(f"not starting: {problem}")
+        if urls and problem:
+            try:
+                _api(base_url, "PATCH", f"/tasks/{task_id}", {
+                    "status": "failed",
+                    "exit_code": -1,
+                    "log_tail": _tail(log_file, log_tail_lines),
+                })
+            except Exception as e:
+                _log(f"Warning: PATCH failed: {e}")
+            continue
+
         # ── Execute ────────────────────────────────────────────────────────
         _log(f"Task {task_id} running: {command!r}  cwd={project_dir!r}  log={log_file}")
         actual_start = datetime.now(server_tz)
         exit_code = -1
 
         try:
-            log_dir.mkdir(parents=True, exist_ok=True)
-            with open(log_file, "w") as lf:
+            with open(log_file, "a") as lf:
                 proc = subprocess.Popen(
                     f"source ~/.bashrc 2>/dev/null; {command}",
                     shell=True,

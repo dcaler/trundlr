@@ -192,3 +192,104 @@ def test_busy_with_an_unreported_task_re_sends_its_result(monkeypatch, tmp_path)
     ])
     patches = [b for m, p, b in calls if m == "PATCH" and p == "/tasks/7" and "status" in b]
     assert len(patches) == 3
+
+
+# ── Unload Ollama before each task (incident 2026-11-10) ─────────────────────
+
+class FakeOllama:
+    """In-memory stand-in for Ollama's /api/ps and keep_alive:0 unload.
+    `stuck` models ignore the unload; `down` urls don't answer."""
+
+    def __init__(self, loaded, stuck=(), down=()):
+        self.loaded = {u: list(ms) for u, ms in loaded.items()}
+        self.stuck, self.down = set(stuck), set(down)
+        self.events = []
+
+    def ps(self, url, timeout=10):
+        if url in self.down:
+            raise OSError("connection refused")
+        self.events.append(("ps", url))
+        return list(self.loaded.get(url, []))
+
+    def unload(self, url, model, timeout=30):
+        self.events.append(("unload", url, model))
+        if model not in self.stuck:
+            self.loaded[url].remove(model)
+
+
+def _use(monkeypatch, fake):
+    monkeypatch.setattr(runner, "_ollama_loaded", fake.ps)
+    monkeypatch.setattr(runner, "_ollama_unload", fake.unload)
+
+
+A, B, DUAL = "http://localhost:11434", "http://localhost:11435", "http://localhost:11436"
+
+
+def test_unload_empties_every_listed_instance(monkeypatch):
+    fake = FakeOllama({A: ["gemma4:31b"], DUAL: ["llama3.3:70b"], B: ["gpt-oss:20b"]})
+    _use(monkeypatch, fake)
+    notes = []
+    assert runner.unload_ollama([A, DUAL], timeout=0, poll=0, note=notes.append) is None
+    assert fake.loaded == {A: [], DUAL: [], B: ["gpt-oss:20b"]}  # B not listed: untouched
+    assert f"{DUAL}: unloading llama3.3:70b" in notes
+
+
+def test_unload_reports_a_model_that_will_not_go(monkeypatch):
+    fake = FakeOllama({DUAL: ["llama3.3:70b"]}, stuck={"llama3.3:70b"})
+    _use(monkeypatch, fake)
+    problem = runner.unload_ollama([DUAL], timeout=0, poll=0)
+    assert problem == f"card still holds llama3.3:70b on {DUAL} after 0s"
+
+
+def test_unload_skips_an_instance_that_is_not_running(monkeypatch):
+    fake = FakeOllama({A: ["m"]}, down={DUAL})
+    _use(monkeypatch, fake)
+    notes = []
+    assert runner.unload_ollama([A, DUAL], timeout=0, poll=0, note=notes.append) is None
+    assert any("not answering" in n for n in notes)
+
+
+def test_task_starts_only_after_its_cards_are_clear(monkeypatch, tmp_path):
+    fake = FakeOllama({A: ["gemma4:31b"], DUAL: ["llama3.3:70b"]})
+    _use(monkeypatch, fake)
+    marker = tmp_path / "ran"
+    task = {"id": 1571, "title": "t", "project_directory": str(tmp_path),
+            "command": f"echo started >> {marker}", "unload_urls": [A, DUAL]}
+    seen_at_start = {}
+
+    real_popen = runner.subprocess.Popen
+
+    def popen(*a, **kw):
+        seen_at_start.update({u: list(ms) for u, ms in fake.loaded.items()})
+        return real_popen(*a, **kw)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    calls = _run_main(monkeypatch, tmp_path, [(task, None), (None, None)])
+    assert marker.read_text() == "started\n"
+    assert seen_at_start == {A: [], DUAL: []}
+    log = (tmp_path / "logs" / "task-1571.log").read_text()
+    assert "unloading llama3.3:70b" in log and "cards clear" in log
+    result = [b for m, p, b in calls if m == "PATCH" and p == "/tasks/1571" and "status" in b]
+    assert result[-1]["status"] == "done"
+
+
+def test_task_fails_without_running_if_a_card_will_not_clear(monkeypatch, tmp_path):
+    fake = FakeOllama({DUAL: ["llama3.3:70b"]}, stuck={"llama3.3:70b"})
+    _use(monkeypatch, fake)
+    marker = tmp_path / "ran"
+    task = {"id": 1572, "title": "t", "project_directory": str(tmp_path),
+            "command": f"touch {marker}", "unload_urls": [DUAL]}
+    monkeypatch.setenv("RUNNER_UNLOAD_TIMEOUT", "0")
+    calls = _run_main(monkeypatch, tmp_path, [(task, None), (None, None)])
+    assert not marker.exists()
+    result = [b for m, p, b in calls if m == "PATCH" and p == "/tasks/1572" and "status" in b]
+    assert result[-1]["status"] == "failed" and result[-1]["exit_code"] == -1
+    assert "card still holds llama3.3:70b" in result[-1]["log_tail"]
+
+
+def test_no_unload_urls_means_no_ollama_calls(monkeypatch, tmp_path):
+    fake = FakeOllama({A: ["m"]})
+    _use(monkeypatch, fake)
+    task = {"id": 9, "title": "t", "command": "true", "project_directory": str(tmp_path)}
+    _run_main(monkeypatch, tmp_path, [(task, None), (None, None)])
+    assert fake.events == []

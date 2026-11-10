@@ -75,7 +75,7 @@ screen -S trundlr_${slug}
 # 2. Inside the screen, run the runner (then Ctrl-A D to detach):
 ${cdLine}
 ${env.join(' \\\n')} \\
-python3 runner.py 2>&1 | tee ${shQuote(`logs/runner-${slug}.log`)}`;
+python3 runner.py 2>&1 | tee -a ${shQuote(`logs/runner-${slug}.log`)}`;
       }).join('\n\n');
 
   const attachCmds = runnerResources.length === 0

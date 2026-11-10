@@ -22,10 +22,11 @@ router = APIRouter(prefix="/api/runner", tags=["runner"])
 logger = logging.getLogger(__name__)
 
 
-def _now_naive(session: Session) -> datetime:
+def _now_naive(session: Session, seconds: bool = False) -> datetime:
     settings = session.get(AppSettings, 1)
     tz = ZoneInfo(settings.timezone if settings else "UTC")
-    return datetime.now(tz).replace(tzinfo=None, second=0, microsecond=0)
+    now = datetime.now(tz).replace(tzinfo=None, microsecond=0)
+    return now if seconds else now.replace(second=0)
 
 
 def _resource_ids(task_id: int, session: Session) -> list[int]:
@@ -132,6 +133,10 @@ def _upcoming_spanning_task(session: Session, resource_id: int, now: datetime) -
 def _settling(session: Session, resource_id: int, now: datetime) -> Optional[tuple[int, datetime]]:
     """(conflicting lane, settled-at) if a conflicting lane's task ended too recently.
 
+    `now` must keep its seconds: a runner reports the actual end to the second,
+    and a minute-truncated now would treat an end earlier in the same minute
+    as a future plan and skip the settle entirely.
+
     Ollama keeps a model resident for minutes after a task (2 min on the dual
     lane, 5 on the single lanes), so a lane sharing that card waits for it to
     unload before starting. Same-lane work is never delayed.
@@ -178,13 +183,36 @@ def claim_next_task(
         return _claim(resource_id, session, after_error)
 
 
-def _claim_read(task: Task, session: Session) -> RunnerClaimRead:
+def _ollama_url(resource: Optional[Resource]) -> Optional[str]:
+    """OLLAMA_URL from a resource's runner env (KEY=value lines), if set."""
+    for line in ((resource.runner_env if resource else None) or "").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key.strip() == "OLLAMA_URL" and value.strip():
+            return value.strip()
+    return None
+
+
+def unload_urls(session: Session, lane_id: int) -> list[str]:
+    """Ollama instances to empty before a task on lane_id starts: the lane's
+    own and those of every lane sharing its cards. A model outlives the task
+    that loaded it (keep_alive), so a lane whose card another lane just used
+    would otherwise find the card full and load its model onto the CPU."""
+    urls: list[str] = []
+    for rid in [lane_id, *sorted(conflicting_resource_ids(session, lane_id))]:
+        url = _ollama_url(session.get(Resource, rid))
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _claim_read(task: Task, session: Session, lane_id: int) -> RunnerClaimRead:
     project = session.get(Project, task.project_id)
     return RunnerClaimRead(
         **task.model_dump(),
         resource_ids=_resource_ids(task.id, session),
         **dependency_fields(dependency_ids(session, task.id)),
         project_directory=project.folder if project else None,
+        unload_urls=unload_urls(session, lane_id),
     )
 
 
@@ -211,7 +239,7 @@ def _claim(resource_id: int, session: Session, after_error: bool = False):
         if after_error and active.status == TaskStatus.in_progress:
             logger.warning("re-handing task %s to resource %s after a lost claim reply",
                            active.id, resource_id)
-            return _claim_read(active, session)
+            return _claim_read(active, session, resource_id)
         return Response(status_code=204, headers={"X-Runner-Idle": f"busy:{active.id}"})
 
     now = _now_naive(session)
@@ -225,7 +253,7 @@ def _claim(resource_id: int, session: Session, after_error: bool = False):
             return Response(status_code=204,
                             headers={"X-Runner-Idle": f"conflict-busy:{cid}:{busy.id}"})
 
-    settling = _settling(session, resource_id, now)
+    settling = _settling(session, resource_id, _now_naive(session, seconds=True))
     if settling:
         cid, until = settling
         return Response(status_code=204,
@@ -268,7 +296,7 @@ def _claim(resource_id: int, session: Session, after_error: bool = False):
         session.rollback()
         logger.exception("re-flow after claiming task %s failed", task.id)
     session.refresh(task)
-    return _claim_read(task, session)
+    return _claim_read(task, session, resource_id)
 
 
 def _take_from_pool(session: Session, task: Task, lane_id: int) -> None:
