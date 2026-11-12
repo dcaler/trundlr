@@ -335,3 +335,18 @@ def test_error_is_emailed_but_moving_it_on_to_failed_is_not(client, project_id, 
     assert sent == [f"ERROR: #{t} t"]
     client.patch(f"/api/tasks/{t}", json={"status": "failed"})
     assert sent == [f"ERROR: #{t} t"]
+
+
+def test_editing_a_done_task_does_not_resend_done_email(client, project_id, monkeypatch):
+    import app.routers.tasks as tasks_router
+    sent = []
+    monkeypatch.setattr(tasks_router, "send_notification",
+                        lambda _s, subject, body, **_: sent.append(subject))
+    gpu = _gpu(client, "GPU")
+    t = _task(client, project_id, gpu)
+    client.patch(f"/api/tasks/{t}", json={"status": "done"})
+    assert sent == [f"DONE: #{t} t"]
+    # The edit form sends the whole task back, status included.
+    r = client.patch(f"/api/tasks/{t}", json={"status": "done", "duration": 2.5})
+    assert r.status_code == 200 and r.json()["duration"] == 2.5
+    assert sent == [f"DONE: #{t} t"]

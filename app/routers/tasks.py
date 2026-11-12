@@ -190,6 +190,7 @@ def update_task(
 ):
     task = _get_task_or_404(task_id, session)
     updates = data.model_dump(exclude_unset=True)
+    old_status = task.status
 
     if "resource_ids" in updates:
         for rid in updates["resource_ids"]:
@@ -250,7 +251,10 @@ def update_task(
     session.add(task)
     session.commit()
     if "status" in updates:
-        _notify_status(session, task)
+        # Edits to a finished task (e.g. its duration) resend its status
+        # unchanged: email only when the status really moved.
+        if task.status != old_status:
+            _notify_status(session, task)
         # A task finishing early or late shifts everything planned after it.
         if task.status in FINISHED:
             _reflow(session)

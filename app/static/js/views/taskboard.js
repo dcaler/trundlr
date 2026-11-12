@@ -72,7 +72,7 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
       </td>
       <td style="color:var(--text-muted);font-size:0.85em">${t.id}</td>
       <td><button class="btn btn-ghost open-task-btn" data-id="${t.id}" data-project-id="${t.project_id}" style="padding:0;text-align:left;font-weight:inherit;font-size:inherit">${escHtml(t.title)}</button>${descSnippet}${depHtml}</td>
-      <td style="color:var(--text-muted);font-size:0.9em">${priorityBadge(priorityByProject[t.project_id])}${escHtml(byProject[t.project_id] || '—')}</td>
+      <td style="color:var(--text-muted);font-size:0.9em">${priorityBadge(priorityByProject[t.project_id])}<button class="btn btn-ghost open-project-btn" data-project-id="${t.project_id}" style="padding:0;text-align:left;font-weight:inherit;font-size:inherit;color:inherit">${escHtml(byProject[t.project_id] || '—')}</button></td>
       <td style="color:var(--text-muted);font-size:0.9em">${escHtml((t.resource_ids || []).map(id => byResource[id]).filter(Boolean).join(', ') || '—')}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.start_date)}</td>
       <td style="font-size:0.85em;white-space:nowrap">${fmtDt(t.end_date)}</td>
@@ -164,6 +164,10 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
     btn.addEventListener('click', () =>
       showProjectDetail(el, parseInt(btn.dataset.projectId), parseInt(btn.dataset.id))
     );
+  });
+
+  el.querySelectorAll('.open-project-btn').forEach(btn => {
+    btn.addEventListener('click', () => showProjectDetail(el, parseInt(btn.dataset.projectId)));
   });
 
   el.querySelectorAll('.status-sel').forEach(sel => {
