@@ -280,3 +280,32 @@ def test_one_blocked_dependency_of_several_leaves_task_unscheduled(session):
 
     result = reflow_schedule(session)
     assert any(u["id"] == waiting.id for u in result["unscheduled"])
+
+
+# ── slot search widens past its first look-ahead ────────────────────────────
+
+def test_slot_found_after_a_long_blockout(session):
+    from datetime import date
+    from app.models import ResourceBlockout
+    p = _project(session)
+    r = _resource(session)
+    today = date.today()
+    session.add(ResourceBlockout(resource_id=r.id, start_date=today - timedelta(days=1),
+                                 end_date=today + timedelta(days=40)))
+    session.commit()
+    t = _task(session, p, [r], duration=2.0)
+    reflow_schedule(session)
+    session.commit()
+    session.refresh(t)
+    assert t.start_date.date() == today + timedelta(days=41)
+
+
+def test_busy_intervals_merge():
+    from datetime import datetime
+    from app.scheduling import add_busy
+    d = datetime(2026, 1, 1)
+    h = lambda n: d + timedelta(hours=n)
+    busy = []
+    for iv in [(h(5), h(6)), (h(1), h(2)), (h(2), h(3)), (h(8), h(9)), (h(4), h(8))]:
+        add_busy(busy, iv)
+    assert busy == [(h(1), h(3)), (h(4), h(9))]

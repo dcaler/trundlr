@@ -186,7 +186,8 @@ def get_task(task_id: int = DBId(), session: Session = Depends(get_db)):
 
 @router.patch("/{task_id}", response_model=TaskRead)
 def update_task(
-    data: TaskUpdate, task_id: int = DBId(), session: Session = Depends(get_db)
+    data: TaskUpdate, task_id: int = DBId(), session: Session = Depends(get_db),
+    skip_reflow: bool = Query(False),
 ):
     task = _get_task_or_404(task_id, session)
     updates = data.model_dump(exclude_unset=True)
@@ -256,14 +257,15 @@ def update_task(
         if task.status != old_status:
             _notify_status(session, task)
         # A task finishing early or late shifts everything planned after it.
-        if task.status in FINISHED:
+        if task.status in FINISHED and not skip_reflow:
             _reflow(session)
     session.refresh(task)
     return _task_read(task, session)
 
 
 @router.delete("/{task_id}", status_code=204)
-def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
+def delete_task(task_id: int = DBId(), session: Session = Depends(get_db),
+                skip_reflow: bool = Query(False)):
     task = _get_task_or_404(task_id, session)
 
     # Any task that depends on this one would dangle (and the FK delete would 500),
@@ -284,7 +286,8 @@ def delete_task(task_id: int = DBId(), session: Session = Depends(get_db)):
                           f"#{task.id} '{task.title}' was deleted.\n\nThe following tasks are now blocked:\n"
                           + "\n".join(f"  • #{d.id} {d.title}" for d in dependents),
                           projects=blocked_projects)
-    _reflow(session)
+    if not skip_reflow:
+        _reflow(session)
 
 
 @router.post("/{task_id}/copy", response_model=TaskRead, status_code=201)

@@ -350,3 +350,32 @@ def test_editing_a_done_task_does_not_resend_done_email(client, project_id, monk
     r = client.patch(f"/api/tasks/{t}", json={"status": "done", "duration": 2.5})
     assert r.status_code == 200 and r.json()["duration"] == 2.5
     assert sent == [f"DONE: #{t} t"]
+
+
+# ── skip_reflow (batch scripts) ──────────────────────────────────────────────
+
+def _calls(monkeypatch):
+    import app.routers.tasks as tasks_router
+    calls = []
+    monkeypatch.setattr(tasks_router, "run_reflow", lambda s: calls.append(1))
+    return calls
+
+
+def test_skip_reflow_on_create_finish_and_delete(client, project_id, monkeypatch):
+    gpu = _gpu(client, "GPU")
+    calls = _calls(monkeypatch)
+    resp = client.post("/api/tasks/?skip_reflow=true", json={
+        "title": "t", "project_id": project_id, "resource_ids": [gpu], "duration": 1})
+    tid = resp.json()["id"]
+    client.patch(f"/api/tasks/{tid}?skip_reflow=true", json={"status": "done"})
+    assert client.delete(f"/api/tasks/{tid}?skip_reflow=true").status_code == 204
+    assert calls == []
+
+
+def test_finish_and_delete_reflow_by_default(client, project_id, monkeypatch):
+    gpu = _gpu(client, "GPU")
+    tid = _task(client, project_id, gpu, duration=1)
+    calls = _calls(monkeypatch)
+    client.patch(f"/api/tasks/{tid}", json={"status": "done"})
+    client.delete(f"/api/tasks/{tid}")
+    assert len(calls) == 2

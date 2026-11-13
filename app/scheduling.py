@@ -9,6 +9,7 @@ over-allocated (a conflict) when assigned task-hours exceed available hours.
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Iterable, Iterator, Optional
@@ -473,13 +474,17 @@ def _subtract_busy(intervals: list[Interval], busy: list[Interval]) -> list[Inte
 
 
 def _intersect(a: list[Interval], b: list[Interval]) -> list[Interval]:
-    """Pairwise intersection of two interval lists."""
+    """Intersection of two sorted lists of disjoint intervals (two-pointer)."""
     out: list[Interval] = []
-    for s1, e1 in a:
-        for s2, e2 in b:
-            s, e = max(s1, s2), min(e1, e2)
-            if e > s:
-                out.append((s, e))
+    i = j = 0
+    while i < len(a) and j < len(b):
+        s, e = max(a[i][0], b[j][0]), min(a[i][1], b[j][1])
+        if e > s:
+            out.append((s, e))
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
     return out
 
 
@@ -499,6 +504,40 @@ def _merge_adjacent(ivs: list[Interval]) -> list[Interval]:
     return out
 
 
+def add_busy(busy: list[Interval], iv: Interval) -> None:
+    """Insert `iv` into `busy`, a sorted list of disjoint intervals, merging any
+    it overlaps or touches. Keeping busy time in this shape lets the slot search
+    find one day's busy time by bisection instead of scanning all of it."""
+    s, e = iv
+    if e <= s:
+        return
+    i = bisect.bisect_left(busy, (s,))
+    if i > 0 and busy[i - 1][1] >= s:
+        i -= 1
+    j = i
+    while j < len(busy) and busy[j][0] <= e:
+        s, e = min(s, busy[j][0]), max(e, busy[j][1])
+        j += 1
+    busy[i:j] = [(s, e)]
+
+
+def _busy_between(busy: list[Interval], lo: datetime, hi: datetime) -> list[Interval]:
+    """The intervals of sorted, disjoint `busy` that overlap [lo, hi)."""
+    i = bisect.bisect_left(busy, (lo,))
+    if i > 0 and busy[i - 1][1] > lo:
+        i -= 1
+    out = []
+    while i < len(busy) and busy[i][0] < hi:
+        out.append(busy[i])
+        i += 1
+    return out
+
+
+# First look this many days past the task's own length for a slot; double the
+# look-ahead each time nothing fits, up to the full horizon.
+_SLOT_LOOKAHEAD_DAYS = 7
+
+
 def _earliest_slot(
     resources: list[Resource],
     earliest: datetime,
@@ -506,39 +545,57 @@ def _earliest_slot(
     busy: dict[int, list[Interval]],
     windows_by_res: dict[int, list[ResourceWindow]],
     blockouts_by_res: dict[int, list[ResourceBlockout]],
+    avail_cache: "dict[tuple[int, date], list[Interval]] | None" = None,
 ) -> Optional[datetime]:
     """Earliest start ≥ `earliest` where a `dur`-long block fits on EVERY listed
     resource at once. Adjacent daily windows (≤ 1 min gap) are merged so that
     24/7 resources (00:00–23:59) are treated as continuous across midnight.
-    Returns None if no slot exists within SCHED_HORIZON_DAYS."""
+    Returns None if no slot exists within SCHED_HORIZON_DAYS.
+
+    `busy` lists must be sorted and disjoint (build them with add_busy).
+    `avail_cache` carries each resource-day's availability between calls.
+
+    The search looks a few days ahead first and widens only when nothing fits.
+    Cutting the free time off at the look-ahead edge only shortens the last
+    interval, and never moves the start of one, so the first slot that fits in
+    the cut-off view is the first slot overall."""
     if not resources:
         return None
+    if avail_cache is None:
+        avail_cache = {}
     start_day = earliest.date()
+    total_days = SCHED_HORIZON_DAYS + 2
+    built = 0
+    resource_ivs: list[list[Interval]] = [[] for _ in resources]
+    days = min(total_days, dur.days + 1 + _SLOT_LOOKAHEAD_DAYS)
+    while True:
+        for k, r in enumerate(resources):
+            rbusy = busy.get(r.id, [])
+            for off in range(built, days):
+                day = start_day + timedelta(days=off)
+                key = (r.id, day)
+                avail = avail_cache.get(key)
+                if avail is None:
+                    avail = sorted(_available_intervals_on_day(
+                        r, day, windows_by_res.get(r.id), blockouts_by_res.get(r.id)))
+                    avail_cache[key] = avail
+                if not avail:
+                    continue
+                day_start = datetime.combine(day, time.min)
+                todays = _busy_between(rbusy, day_start, day_start + timedelta(days=1))
+                resource_ivs[k].extend(_subtract_busy(avail, todays))
+        built = days
 
-    # Build per-resource continuous free-time lists across the full horizon,
-    # then intersect. Merging adjacent daily intervals lets tasks span midnight
-    # on resources that are available around the clock.
-    resource_free: list[list[Interval]] = []
-    for r in resources:
-        ivs: list[Interval] = []
-        for off in range(SCHED_HORIZON_DAYS + 2):
-            day = start_day + timedelta(days=off)
-            avail = _available_intervals_on_day(
-                r, day, windows_by_res.get(r.id), blockouts_by_res.get(r.id)
-            )
-            ivs.extend(_subtract_busy(avail, busy.get(r.id, [])))
-        resource_free.append(_merge_adjacent(sorted(ivs)))
-
-    combined = resource_free[0]
-    for other in resource_free[1:]:
-        combined = _intersect(combined, other)
-
-    for s, e in combined:
-        cand = max(s, earliest)
-        if cand + dur <= e:
-            return cand
-
-    return None
+        combined = _merge_adjacent(sorted(resource_ivs[0]))
+        for ivs in resource_ivs[1:]:
+            combined = _intersect(combined, _merge_adjacent(sorted(ivs)))
+        for s, e in combined:
+            cand = max(s, earliest)
+            if cand + dur <= e:
+                return cand
+        if days >= total_days:
+            return None
+        days = min(total_days, days * 2)
 
 
 def task_duration(task: Task) -> timedelta:
@@ -595,9 +652,11 @@ def reflow_schedule(session: Session) -> dict:
         return choices
 
     def occupy(rid: int, iv: Interval) -> None:
-        busy[rid].append(iv)
+        add_busy(busy[rid], iv)
         for other in conflicts.get(rid, ()):
-            busy[other].append(iv)
+            add_busy(busy[other], iv)
+
+    avail_cache: dict[tuple[int, date], list[Interval]] = {}
 
     # Overrunning tasks: stretch their planned end to now + OVERRUN_MARGIN.
     stretched = 0
@@ -708,6 +767,7 @@ def reflow_schedule(session: Session) -> dict:
                 s = _earliest_slot(
                     [resources[r] for r in lanes],
                     earliest, task_duration(t), busy, windows_by_res, blockouts_by_res,
+                    avail_cache,
                 )
                 if s is not None and (slot is None or s < slot):
                     slot, rids = s, lanes
