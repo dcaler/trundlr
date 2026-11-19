@@ -294,3 +294,61 @@ def test_open_only_keeps_completed_tasks_that_open_tasks_depend_on(client, proje
     _task(client, project_id, "Waiter", depends_on_id=dep["id"])
     titles = {x["title"] for x in client.get("/api/tasks/?open_only=true").json()}
     assert titles == {"Finished dep", "Waiter"}
+
+
+# --- time worked: done and pause ---
+
+def _task_with_estimate(client, project_id, start, hours=3.0):
+    resp = client.post("/api/tasks/", json={
+        "title": "Timed", "project_id": project_id, "start_date": start, "duration": hours,
+    })
+    return resp.json()["id"]
+
+
+def test_done_from_todo_counts_elapsed_not_estimate(client, project_id):
+    # Started at the scheduled time without being marked in progress: the
+    # duration is the time from start to end, not that plus the 3h estimate.
+    tid = _task_with_estimate(client, project_id, "2026-11-19T09:00:00")
+    resp = client.patch(f"/api/tasks/{tid}", json={
+        "status": "done", "end_date": "2026-11-19T11:30:00"})
+    assert resp.status_code == 200
+    assert resp.json()["duration"] == 2.5
+
+
+def test_done_from_in_progress_counts_elapsed_not_estimate(client, project_id):
+    tid = _task_with_estimate(client, project_id, "2026-11-19T08:00:00")
+    client.patch(f"/api/tasks/{tid}", json={
+        "status": "in_progress", "start_date": "2026-11-19T09:00:00",
+        "end_date": "2026-11-19T12:00:00"})
+    resp = client.patch(f"/api/tasks/{tid}", json={
+        "status": "done", "end_date": "2026-11-19T10:15:00"})
+    assert resp.json()["duration"] == 1.25
+
+
+def test_pause_banks_hours_and_done_adds_them(client, project_id, monkeypatch):
+    from datetime import datetime
+    import app.routers.tasks as tasks_mod
+    tid = _task_with_estimate(client, project_id, "2026-11-19T08:00:00")
+    client.patch(f"/api/tasks/{tid}", json={
+        "status": "in_progress", "start_date": "2026-11-19T09:00:00",
+        "end_date": "2026-11-19T12:00:00"})
+    monkeypatch.setattr(tasks_mod, "_now_naive", lambda s: datetime(2026, 11, 19, 10, 0))
+    body = client.patch(f"/api/tasks/{tid}", json={"status": "paused"}).json()
+    assert body["worked_hours"] == 1.0
+    assert body["start_date"] is None
+    assert body["duration"] == 3.0  # the estimate is untouched
+    client.patch(f"/api/tasks/{tid}", json={
+        "status": "in_progress", "start_date": "2026-11-19T13:00:00",
+        "end_date": "2026-11-19T15:00:00"})
+    body = client.patch(f"/api/tasks/{tid}", json={
+        "status": "done", "end_date": "2026-11-19T13:30:00"}).json()
+    assert body["duration"] == 1.5
+    assert body["worked_hours"] is None
+
+
+def test_done_with_explicit_duration_is_kept(client, project_id):
+    # A runner reports its own measured duration; it must not be recomputed.
+    tid = _task_with_estimate(client, project_id, "2026-11-19T09:00:00")
+    resp = client.patch(f"/api/tasks/{tid}", json={
+        "status": "done", "end_date": "2026-11-19T11:00:00", "duration": 0.75})
+    assert resp.json()["duration"] == 0.75

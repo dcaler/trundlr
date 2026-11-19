@@ -176,32 +176,20 @@ async function showTaskBoard(el, showCompleted = false, resourceFilter = null, h
       const task = tasks.find(t => t.id === parseInt(sel.dataset.id));
       if (sel.value === 'in_progress') {
         patch.start_date = nowIsoStr();
-        if (task?.duration) {
-          const endMs = Date.parse(patch.start_date + 'Z') + task.duration * 3600000;
+        // Plan the end from the hours still to go (estimate less any banked by pausing).
+        const left = (task?.duration || 0) - (task?.worked_hours || 0);
+        if (left > 0) {
+          const endMs = Date.parse(patch.start_date + 'Z') + left * 3600000;
           const d = new Date(endMs);
           const p = n => String(n).padStart(2, '0');
           patch.end_date = `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:00`;
         } else if (task?.end_date && task.end_date < patch.start_date) {
           patch.end_date = null;
         }
-      } else if (sel.value === 'paused') {
-        // Accumulate elapsed time into duration, then clear start_date so the
-        // clock stops. Resuming (→ in_progress) sets a fresh start_date.
-        if (task?.start_date) {
-          const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
-          const elapsedH = (Date.now() - startMs) / 3600000;
-          patch.duration = Math.round(((task.duration || 0) + elapsedH) * 100) / 100;
-        }
-        patch.start_date = null;
       } else if (sel.value === 'done') {
+        // The server works out the duration from start, end and hours banked
+        // by pausing; pausing itself needs nothing but the status.
         patch.end_date = nowIsoStr();
-        if (task?.start_date) {
-          // Both are naive wall-clock strings in the same (configured) zone;
-          // parse both as UTC so the tz offset cancels and we get real elapsed hours.
-          const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
-          const elapsedH = (Date.parse(patch.end_date + 'Z') - startMs) / 3600000;
-          patch.duration = Math.round(((task.duration || 0) + elapsedH) * 100) / 100;
-        }
       }
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, patch);

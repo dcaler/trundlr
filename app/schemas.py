@@ -201,6 +201,7 @@ class TaskSummary(BaseModel):
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     duration: Optional[float] = None
+    worked_hours: Optional[float] = None
     exit_code: Optional[int] = None
     project_id: int
     resource_ids: list[int] = []

@@ -67,6 +67,37 @@ def _return_to_pool(session: Session, task: Task) -> None:
 FINISHED = (TaskStatus.done, TaskStatus.error, TaskStatus.failed)
 
 
+def _hours(start: datetime, end: datetime) -> float:
+    return max((end - start).total_seconds() / 3600, 0.0)
+
+
+def _keep_time(session: Session, task: Task, updates: dict) -> None:
+    """Track time worked across pause and done, adding to `updates` before it is applied.
+
+    duration holds the estimate until the task is finished, so it is never
+    added to elapsed time. Hours worked before a pause are banked in worked_hours.
+    A caller that sends duration itself (a runner's result) is left alone.
+    """
+    new = updates.get("status")
+    if new is None or new == task.status or "duration" in updates:
+        return
+    if new == TaskStatus.paused:
+        if task.status == TaskStatus.in_progress and task.start_date:
+            worked = (task.worked_hours or 0) + _hours(task.start_date, _now_naive(session))
+            updates["worked_hours"] = round(worked, 2)
+        updates["start_date"] = None  # the clock stops; resuming sets a new start
+    elif new == TaskStatus.done and updates.get("end_date"):
+        # Marked done by hand with its actual end: duration is the real time worked.
+        # A paused task has no start_date, so only banked hours count.
+        worked = task.worked_hours or 0
+        if task.start_date:
+            worked += _hours(task.start_date, updates["end_date"])
+        updates["duration"] = round(worked, 2)
+        updates["worked_hours"] = None
+    elif new == TaskStatus.todo:
+        updates["worked_hours"] = None  # a retry starts its clock from scratch
+
+
 def _get_task_or_404(task_id: int, session: Session) -> Task:
     task = session.get(Task, task_id)
     if not task:
@@ -230,6 +261,8 @@ def update_task(
     if (updates.get("status") == TaskStatus.failed
             and task.status in (TaskStatus.in_progress, TaskStatus.paused)):
         updates["status"] = TaskStatus.error
+
+    _keep_time(session, task, updates)
 
     for key, value in updates.items():
         setattr(task, key, value)

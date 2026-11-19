@@ -117,6 +117,9 @@ class Task(SQLModel, table=True):
     start_date: Optional[datetime] = Field(default=None)
     end_date: Optional[datetime] = Field(default=None)
     duration: Optional[float] = Field(default=None)  # total hours (informational)
+    # Hours already worked before the current start_date, banked by pausing.
+    # Kept apart from duration, which holds the estimate until the task is done.
+    worked_hours: Optional[float] = Field(default=None)
     # Execution fields — populated by the runner daemon.
     command:   Optional[str] = Field(default=None)  # shell command to execute
     exit_code: Optional[int] = Field(default=None)  # process exit code after completion

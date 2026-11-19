@@ -674,8 +674,10 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
       if (sel.value === 'in_progress') {
         patch.start_date = nowIsoStr();
         const task = taskById[parseInt(sel.dataset.id)];
-        if (task?.duration) {
-          const endMs = Date.parse(patch.start_date + 'Z') + task.duration * 3600000;
+        // Plan the end from the hours still to go (estimate less any banked by pausing).
+        const left = (task?.duration || 0) - (task?.worked_hours || 0);
+        if (left > 0) {
+          const endMs = Date.parse(patch.start_date + 'Z') + left * 3600000;
           const d = new Date(endMs);
           const p = n => String(n).padStart(2, '0');
           patch.end_date = `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:00`;
@@ -683,15 +685,8 @@ async function showProjectDetail(el, projectId, editingTaskId = null, scrollY = 
           patch.end_date = null;
         }
       } else if (sel.value === 'done') {
+        // The server works out the duration from start, end and hours banked by pausing.
         patch.end_date = nowIsoStr();
-        const task = taskById[parseInt(sel.dataset.id)];
-        if (task?.start_date) {
-          // Both are naive wall-clock strings in the same (configured) zone;
-          // parse both as UTC so the tz offset cancels and we get real elapsed hours.
-          const startMs = Date.parse(task.start_date.replace(' ', 'T') + 'Z');
-          const durH = (Date.parse(patch.end_date + 'Z') - startMs) / 3600000;
-          if (durH > 0) patch.duration = Math.round(durH * 100) / 100;
-        }
       }
       try {
         await api.patch(`/tasks/${sel.dataset.id}`, patch);
